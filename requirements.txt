@@ -1,0 +1,9 @@
+torch
+torchvision
+torchmetrics
+numpy
+scikit-image
+scikit-learn
+matplotlib
+tqdm
+GDAL

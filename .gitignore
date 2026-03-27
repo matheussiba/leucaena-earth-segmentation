@@ -130,3 +130,13 @@ dmypy.json
 *.npy
 *.bat
 
+# Large data files
+data/
+prepared/
+experiments/
+*.tif
+*.tiff
+*.geojson
+*.las
+*.laz
+

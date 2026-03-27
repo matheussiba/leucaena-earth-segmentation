@@ -116,8 +116,10 @@ with open(outfile, 'w') as sys.stdout:
 
     torch.set_num_threads(8)
 
-    #loss_fn = nn.CrossEntropyLoss(ignore_index=general.DISCARDED_CLASS, weight=torch.tensor(general.CLASSES_WEIGHTS).to(device))
-    loss_fn = nn.CrossEntropyLoss(ignore_index=general.DISCARDED_CLASS)
+    loss_fn = nn.CrossEntropyLoss(
+        ignore_index=general.IGNORE_INDEX,
+        weight=torch.tensor(general.CLASSES_WEIGHTS).to(device)
+    )
     #loss_fn = nn.BCELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=general.LEARNING_RATE, betas = general.LEARNING_RATE_BETAS)
     #optimizer = torch.optim.SGD(model.parameters(), lr=general.LEARNING_RATE)

@@ -1,5 +1,3 @@
-
-MIN_TRAIN_CLASS = 0.02
+MIN_TRAIN_CLASS = 0.01     # minimum fraction of leucaena pixels to keep a patch
 BATCH_SIZE = 8
-PREDICTION_BATCH_SIZE = 256
-VAL_SPLIT = 0.3
+PREDICTION_BATCH_SIZE = 128

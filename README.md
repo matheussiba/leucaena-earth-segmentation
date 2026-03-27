@@ -1,3 +1,6 @@
+> **Part of the [PhD Leucaena Mapping Project](https://github.com/matheussiba/phd-leucaena-mapping)** — Mapping and Biomass Estimation of *Leucaena leucocephala* with Deep Learning (ESALQ/USP).
+> See also: [leucaena-earth-platform](https://github.com/matheussiba/leucaena-earth-platform) (crowdmapping web app)
+
 # leucaena-earth-segmentation
 
 Binary semantic segmentation of **Leucaena leucocephala** (leucaena) tree canopy using aerial imagery and LiDAR data. Adapted from [felferrari/tree_fusion](https://github.com/felferrari/tree_fusion).

@@ -11,7 +11,7 @@ import torch
 from tqdm import tqdm
 import numpy as np
 from osgeo import ogr, gdal, gdalconst
-from utils.ops import load_dict, save_geotiff
+from utils.ops import save_geotiff
 
 parser = argparse.ArgumentParser(
     description='Train NUMBER_MODELS models based in the same parameters'
@@ -48,7 +48,7 @@ parser.add_argument( # Experiment path
 parser.add_argument( # Base image to generate geotiff pred
     '-i', '--base-image',
     type = pathlib.Path,
-    default = paths.PATH_IMG,
+    default = paths.PATH_OPTICAL,
     help = 'The patch to base image to generate Geotiff prediction'
 )
 
@@ -121,35 +121,8 @@ with open(outfile, 'w') as sys.stdout:
     np.save(os.path.join(predicted_path, 'pred.npy'), pred_b)
     np.save(os.path.join(predicted_path, 'pred_prob.npy'), pred_global.astype(np.float16))
 
-    remap_dict = load_dict(os.path.join(paths.PREPARED_PATH, 'map.data'))
-    print(remap_dict)
-
-    pred_b_remaped = np.empty_like(pred_b)
-    for dest, source in remap_dict.items():
-        print(f'{dest}-{source}')
-        pred_b_remaped[pred_b==dest] = source
-
-    save_geotiff(str(args.base_image), os.path.join(predicted_path, f'pred_{args.experiment}.tif'), pred_b_remaped, dtype = 'byte')
+    save_geotiff(str(args.base_image), os.path.join(predicted_path, f'pred_{args.experiment}.tif'), pred_b, dtype = 'byte')
     save_geotiff(str(args.base_image), os.path.join(predicted_path, f'pred_probs_{args.experiment}.tif'), pred_global, dtype = 'float')
-    '''base_data = gdal.Open(str(args.base_image), gdalconst.GA_ReadOnly)
-
-    geo_transform = base_data.GetGeoTransform()
-    x_res = base_data.RasterXSize
-    y_res = base_data.RasterYSize
-    crs = base_data.GetSpatialRef()
-    proj = base_data.GetProjection()
-
-    output = os.path.join(predicted_path, f'pred.tif')
-
-    target_ds = gdal.GetDriverByName('GTiff').Create(output, x_res, y_res, 1, gdal.GDT_Byte)
-    target_ds.SetGeoTransform(geo_transform)
-    target_ds.SetSpatialRef(crs)
-    target_ds.SetProjection(proj)
-
-    target_ds.GetRasterBand(1).WriteArray(pred_b_remaped)
-    target_ds = None
-
 
     print('Done')
-'''
-        
+

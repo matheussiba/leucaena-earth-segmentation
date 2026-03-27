@@ -1,15 +1,11 @@
-from conf import default, general, paths
+"""Experiment 1: Optical only (B, G, R, NIR) — no LiDAR."""
+from conf import general
 from models.resunet import ResUnetOpt
 
 def get_model():
-    print('Model RGBNir')
+    print('Model: Optical only (B, G, R, NIR)')
     lidar_bands = None
-    input_depth_0 = general.N_OPTICAL_BANDS
-    input_depth_1 = 0
-    #depths = [64, 128, 256, 512]
     depths = [32, 64, 128, 256]
-    print(f'Model size: {depths}')
-    print(f'Input shapes: {input_depth_0}, {input_depth_1}')
-    model = ResUnetOpt(input_depth_0, depths, general.N_CLASSES)
-
+    print(f'  Encoder depths: {depths}')
+    model = ResUnetOpt(general.N_OPTICAL_BANDS, depths, general.N_CLASSES)
     return model, lidar_bands

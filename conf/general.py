@@ -1,36 +1,37 @@
-PATCH_SIZE = 128
-PATCH_OVERLAP = 0.9
+# --- Patch geometry ---
+PATCH_SIZE = 256
+PATCH_OVERLAP = 0.5
 
+# --- File prefixes for prepared numpy arrays ---
 PREFIX_LABEL = 'label'
 PREFIX_OPT = 'opt'
 PREFIX_LIDAR = 'lidar'
 
+# --- Classification ---
+N_CLASSES = 2              # 0 = background, 1 = leucaena
+IGNORE_INDEX = 255         # pixels outside the mapped area (unlabeled)
+N_OPTICAL_BANDS = 4        # B, G, R, NIR
+BAND_NAMES_OPTICAL = ['BLUE', 'GREEN', 'RED', 'NIR']
+BAND_NAMES_LIDAR = ['CHM', 'INTENSITY']
 
-DISCARDED_CLASS = 7
-REMOVED_CLASSES = [10, 11]
-N_CLASSES = 10 - len(REMOVED_CLASSES)
-N_OPTICAL_BANDS = 4
-#N_LIDAR_BANDS = 1#6
-"""Bands order: 'BLUE','RED','GREEN','NIR','nx','ny','nz','curvatura','intensity','chm'"""
-#                 0      1      2      3     0    1    2       3           4        5                     
-MAX_EPOCHS = 500
-
-
-
-#LEARNING_RATE = 1e-4
-LEARNING_RATE = 4e-5
+# --- Training hyperparameters ---
+MAX_EPOCHS = 300
+LEARNING_RATE = 1e-4
 LEARNING_RATE_BETAS = (0.9, 0.999)
 LEARNING_RATE_SCHEDULER_GAMMA = 0.995
-#LEARNING_RATE_SCHEDULER_MILESTONES = [5, 10, 20, 50]
 LEARNING_RATE_SCHEDULER_MILESTONES = [5, 20]
 
-B_W = 0.01
-T_W = 0.13
-CLASSES_WEIGHTS = [B_W, T_W, T_W, T_W, T_W, T_W, T_W, T_W, T_W, 0]
+# Class weights: [background, leucaena] — higher weight for leucaena (minority class)
+CLASSES_WEIGHTS = [0.3, 0.7]
 
-
+# --- Early stopping ---
 EARLY_STOP_MIN_EPOCHS = LEARNING_RATE_SCHEDULER_MILESTONES[-1]
-EARLY_STOP_PATIENCE = 10
-EARLY_STOP_MIN_DELTA = 0.00009
+EARLY_STOP_PATIENCE = 15
+EARLY_STOP_MIN_DELTA = 0.00005
 
-PREDICTION_OVERLAPS = [0, 0.1, 0.3, 0.5, 0.7]
+# --- Prediction ---
+PREDICTION_OVERLAPS = [0, 0.25, 0.5]
+
+# --- Train/test split ---
+TEST_SPLIT = 0.2           # fraction of patches reserved for testing
+VAL_SPLIT = 0.2            # fraction of train patches reserved for validation

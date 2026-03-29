@@ -1,3 +1,8 @@
+"""
+Global hyperparameters and naming for the leucaena-earth-segmentation project.
+
+Tweak patch size / splits here; paths live in ``conf/paths.py``, CLI defaults in ``conf/default.py``.
+"""
 # --- Patch geometry ---
 PATCH_SIZE = 256
 PATCH_OVERLAP = 0.5
@@ -10,6 +15,8 @@ PREFIX_LIDAR = 'lidar'
 # --- Classification ---
 N_CLASSES = 2              # 0 = background, 1 = leucaena
 IGNORE_INDEX = 255         # pixels outside the mapped area (unlabeled)
+# torchmetrics / trainer use this name for pixels to skip in F1 (same value as IGNORE_INDEX).
+DISCARDED_CLASS = IGNORE_INDEX
 N_OPTICAL_BANDS = 4        # B, G, R, NIR
 BAND_NAMES_OPTICAL = ['BLUE', 'GREEN', 'RED', 'NIR']
 BAND_NAMES_LIDAR = ['CHM', 'INTENSITY']

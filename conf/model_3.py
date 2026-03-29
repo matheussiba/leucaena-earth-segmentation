@@ -1,4 +1,8 @@
-"""Experiment 3: Late fusion — separate encoders for Optical and LiDAR."""
+"""
+Experiment 3 — Late fusion.
+
+Separate encoder–decoder towers; feature maps are concatenated before the final classifier.
+"""
 from conf import general
 from models.resunet import LateFusion
 

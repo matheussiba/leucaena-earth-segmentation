@@ -1,4 +1,8 @@
-"""Experiment 2: Early fusion — Optical + all LiDAR bands concatenated."""
+"""
+Experiment 2 — Early fusion.
+
+Stacks optical and LiDAR along channels *before* the encoder (single-stream U-Net).
+"""
 from conf import general
 from models.resunet import ResUnet
 

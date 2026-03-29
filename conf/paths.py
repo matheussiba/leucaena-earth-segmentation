@@ -1,3 +1,8 @@
+"""
+Filesystem layout for raw inputs and experiment outputs.
+
+Point ``PATH_*`` entries at your local GeoTIFFs / GeoJSON before running ``prep-data.py``.
+"""
 import os
 
 # --- Optical imagery (4-band GeoTIFF: B, G, R, NIR) ---

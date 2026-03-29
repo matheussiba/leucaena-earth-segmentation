@@ -1,23 +1,53 @@
-import argparse
-import pathlib
-import importlib
+"""
+Train a ResUNet experiment for leucaena segmentation.
+
+Typical workflow
+----------------
+1. Run ``python prep-data.py`` to populate ``prepared/``.
+2. Run ``python train.py -e <N>`` where ``N`` matches ``conf/model_<N>.py``
+   (e.g. ``-e 1`` → optical-only, ``-e 2`` early fusion, ``-e 3`` late fusion).
+3. Checkpoints and logs live under ``experiments/exp_<N>/``.
+
+Notes for code readers
+----------------------
+- ``sys.stdout`` is temporarily redirected to a log file under ``experiments/.../logs/``;
+  all ``print`` output from the training block goes there (and not the console).
+- The model receives a *tuple* ``(optical_tensor, lidar_tensor)``; see ``utils/dataloader.py``.
+- ``-c`` / ``--continue-train`` reloads ``models/model.pt`` (same experiment folder).
+"""
+import argparse       # parses command-line arguments (e.g. -e 1 for experiment 1)
+import pathlib        # object-oriented filesystem paths
+import importlib      # dynamic import — lets us load conf/model_1.py, model_2.py, etc. at runtime
 from conf import default, general, paths
-from models.resunet import ResUnet
 import os
 import time
-from multiprocessing import Process
 import sys
+
+# multiprocessing.Process: could be used to run multiple training jobs in parallel
+# (e.g. train model_1 and model_2 simultaneously on a multi-GPU machine).
+# Not active in the current single-model loop but left here as a starting point.
+from multiprocessing import Process
+
 from utils.dataloader import TreeTrainDataSet
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader  # wraps a Dataset and produces batches automatically
 import torch
 from torch import nn
+
+# ResUnet: imported for type reference and quick testing in a Python shell.
+# In the normal workflow the model is loaded dynamically via importlib below.
+from models.resunet import ResUnet
+
 from utils.ops import count_parameters
-from tqdm import tqdm
+from tqdm import tqdm   # progress bar for the training loop
 from utils.trainer import train_loop, val_loop, EarlyStop, val_sample_image
+
+# MultiStepLR: reduces the learning rate at specific epoch milestones (step schedule).
+# ExponentialLR: multiplies the LR by gamma every epoch (smoother decay).
+# Both are imported so you can switch between them by commenting/uncommenting below.
 from torch.optim.lr_scheduler import MultiStepLR, ExponentialLR
 
 parser = argparse.ArgumentParser(
-    description='Train NUMBER_MODELS models based in the same parameters'
+    description='Train one ResUNet experiment (see conf/model_<e>.py for architecture).'
 )
 
 parser.add_argument( # Experiment number
@@ -64,8 +94,7 @@ parser.add_argument( # Data Augmentation
 
 args = parser.parse_args()
 
-
-
+# Per-experiment folder layout mirrors the original tree_fusion project.
 exp_path = os.path.join(str(args.experiments_path), f'exp_{args.experiment}')
 if not os.path.exists(exp_path):
     os.mkdir(exp_path)
@@ -95,8 +124,8 @@ print(f"Using {device} device")
 
 outfile = os.path.join(logs_path, f'train_{args.experiment}.txt')
 with open(outfile, 'w') as sys.stdout:
-
-    model_m =importlib.import_module(f'conf.model_{args.experiment}')
+    # Dynamic import: experiment id must match an existing conf/model_<id>.py
+    model_m = importlib.import_module(f'conf.model_{args.experiment}')
     model, lidar_bands = model_m.get_model()
 
     print(f'{model.__class__.__name__}')
@@ -116,13 +145,13 @@ with open(outfile, 'w') as sys.stdout:
 
     torch.set_num_threads(8)
 
+    # ResUNetClassifier applies Softmax on outputs; PyTorch CE typically expects raw logits.
+    # If you change the classifier head, align loss + metrics accordingly.
     loss_fn = nn.CrossEntropyLoss(
         ignore_index=general.IGNORE_INDEX,
         weight=torch.tensor(general.CLASSES_WEIGHTS).to(device)
     )
-    #loss_fn = nn.BCELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=general.LEARNING_RATE, betas = general.LEARNING_RATE_BETAS)
-    #optimizer = torch.optim.SGD(model.parameters(), lr=general.LEARNING_RATE)
+    optimizer = torch.optim.Adam(model.parameters(), lr=general.LEARNING_RATE, betas=general.LEARNING_RATE_BETAS)
     model_path = os.path.join(models_path, 'model.pt')
     early_stop = EarlyStop(
         train_patience=general.EARLY_STOP_PATIENCE,
@@ -147,12 +176,16 @@ with open(outfile, 'w') as sys.stdout:
     print(f'Scheduler Gamma :{general.LEARNING_RATE_SCHEDULER_GAMMA}')
     print(f'LR Milestones :{general.LEARNING_RATE_SCHEDULER_MILESTONES}')
 
+    # MultiStepLR drops the LR by `gamma` at each epoch in MILESTONES — good when you
+    # know the model needs larger steps early and smaller steps after a certain epoch.
     '''scheduler = MultiStepLR(
         optimizer, 
         milestones = general.LEARNING_RATE_SCHEDULER_MILESTONES,
         gamma=general.LEARNING_RATE_SCHEDULER_GAMMA,
         verbose = True
         )'''
+
+    # ExponentialLR multiplies the LR by gamma every epoch (gentler, continuous decay).
     scheduler = ExponentialLR(
         optimizer, 
         gamma=general.LEARNING_RATE_SCHEDULER_GAMMA,

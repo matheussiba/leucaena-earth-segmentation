@@ -1,14 +1,38 @@
-"""Evaluate predictions against test labels for binary leucaena segmentation."""
+"""
+Evaluate saved predictions against the prepared test label raster.
+
+Inputs (expected on disk)
+-------------------------
+- ``experiments/exp_<e>/predicted/pred.npy`` — flat uint8 class id per pixel (same order as test label).
+- ``prepared/label_test.npy`` — from ``prep-data.py``; pixels ``255`` (``IGNORE_INDEX``) are excluded.
+
+Output
+------
+Writes a text report to ``experiments/exp_<e>/logs/eval_<e>.txt`` (stdout is redirected to that file).
+
+Metrics are per-class precision / recall / F1 plus sklearn ``classification_report`` and confusion matrix.
+"""
 import argparse
 import pathlib
 import os
 import sys
 
 import numpy as np
+
+# tqdm: progress bar — useful when evaluation iterates over many tiles or large arrays.
+# Not strictly needed in the current implementation (numpy operations are vectorised),
+# but kept here for when you add tile-by-tile or image-by-image evaluation loops.
 from tqdm import tqdm
+
+# classification_report: prints precision, recall, F1 and support per class in one call.
+# confusion_matrix: shows TP, TN, FP, FN in a 2x2 table for binary classification.
 from sklearn.metrics import classification_report, confusion_matrix
 
 from conf import default, general, paths
+
+# load_dict: reads the class remap dictionary saved by prep-data.py (pickle file).
+# In binary segmentation this is trivial {0:0, 1:1}, but useful if you extend to
+# multi-class experiments where some classes are merged or discarded.
 from utils.ops import load_dict
 
 parser = argparse.ArgumentParser(description='Evaluate experiment predictions')
@@ -17,6 +41,7 @@ parser.add_argument('-x', '--experiments-path', type=pathlib.Path, default=paths
 
 args = parser.parse_args()
 
+# Must match the experiment id used for ``prediction.py`` and ``train.py``.
 exp_path = os.path.join(str(args.experiments_path), f'exp_{args.experiment}')
 logs_path = os.path.join(exp_path, 'logs')
 predicted_path = os.path.join(exp_path, 'predicted')

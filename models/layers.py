@@ -1,3 +1,4 @@
+"""Building blocks for ResUNet (conv-BN-ReLU residual stacks)."""
 from torch import nn
 
 class ResidualBlock(nn.Module):

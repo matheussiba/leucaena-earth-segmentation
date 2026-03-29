@@ -1,3 +1,18 @@
+"""
+Run sliding-window inference over the prepared scene and write GeoTIFF outputs.
+
+Flow
+----
+1. Load weights from ``experiments/exp_<e>/models/model.pt`` (same ``-e`` as training).
+2. ``TreePredDataSet`` pads the image, extracts overlapping patches, and the DataLoader
+   batches them for the GPU.
+3. For each overlap setting in ``general.PREDICTION_OVERLAPS``, predictions are
+   accumulated into ``pred_sum`` / ``pred_count`` so edge pixels are averaged across
+   windows (standard tiled inference trick).
+4. Averages across overlap passes, then ``argmax`` for class IDs; saves ``.npy`` + GeoTIFF.
+
+The base image ``-i`` is only used to copy geotransform / CRS into the output rasters.
+"""
 import argparse
 import pathlib
 import importlib
@@ -14,7 +29,7 @@ from osgeo import ogr, gdal, gdalconst
 from utils.ops import save_geotiff
 
 parser = argparse.ArgumentParser(
-    description='Train NUMBER_MODELS models based in the same parameters'
+    description='Predict full-scene segmentation from a trained experiment checkpoint.'
 )
 
 parser.add_argument( # Experiment number
@@ -83,6 +98,7 @@ with open(outfile, 'w') as sys.stdout:
 
     overlaps = general.PREDICTION_OVERLAPS
 
+    # One accumulator per class channel; we average softmax probabilities over overlaps and tiles.
     pred_global_sum = np.zeros(dataset.original_shape+(general.N_CLASSES,))
     for overlap in overlaps:
         print(f'Predicting overlap {overlap}')
@@ -103,6 +119,8 @@ with open(outfile, 'w') as sys.stdout:
         preds = np.moveaxis(preds.numpy().astype(np.uint8), 1, -1)
         pred_sum = np.zeros(dataset.padded_shape+(general.N_CLASSES,)).reshape((-1, general.N_CLASSES))
         pred_count = np.zeros(dataset.padded_shape+(general.N_CLASSES,)).reshape((-1, general.N_CLASSES))
+        # Scatter-add: each patch vote adds to every pixel it covers; pred_count tracks
+        # how many votes so we can divide (handles overlapping windows).
         one_window = np.ones((general.PATCH_SIZE, general.PATCH_SIZE, general.N_CLASSES))
         for idx, idx_patch in enumerate(tqdm(dataset.idx_patches)):
             pred_sum[idx_patch] += preds[idx]
@@ -115,6 +133,7 @@ with open(outfile, 'w') as sys.stdout:
 
         pred_global_sum += pred_sum / pred_count
 
+    # Mean across overlap strategies (e.g. 0%, 25%, 50% step) for a smoother mosaic.
     pred_global = pred_global_sum / len(overlaps)
     pred_b = pred_global.argmax(axis=-1).astype(np.uint8)
 

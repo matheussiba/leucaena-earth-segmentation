@@ -1,3 +1,9 @@
+"""
+Training / validation loops and early stopping.
+
+The model forward is called as ``model(X)`` where ``X`` is the batch from the dataloader:
+a tuple ``(opt_batch, lidar_batch)``. Loss uses ``general.IGNORE_INDEX`` for masked pixels.
+"""
 from tqdm import tqdm
 import torch
 import os
@@ -99,6 +105,8 @@ def val_sample_image(dataloader, model, path_to_samples, epoch):
         plt.close()
 
 class EarlyStop():
+    """Stop when validation loss fails to improve for ``train_patience`` epochs (after optional warmup)."""
+
     def __init__(self, train_patience, path_to_save, min_delta = 0, min_epochs = None) -> None:
 
         self.train_pat = train_patience

@@ -1,4 +1,9 @@
-"""Experiment 1: Optical only (B, G, R, NIR) — no LiDAR."""
+"""
+Experiment 1 — Optical-only baseline.
+
+``lidar_bands=None`` tells ``TreeTrainDataSet`` to keep the LiDAR tensor for API
+compatibility but the network only uses ``x[0]`` (see ``ResUnetOpt``).
+"""
 from conf import general
 from models.resunet import ResUnetOpt
 

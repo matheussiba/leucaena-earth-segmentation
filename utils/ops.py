@@ -1,3 +1,9 @@
+"""
+Geospatial and I/O helpers for the leucaena segmentation pipeline.
+
+GDAL/OGR is used for GeoTIFF read/write and GeoJSON rasterization so labels stay
+aligned with the optical reference grid. NumPy arrays are HWC for multi-band images.
+"""
 import json
 import numpy as np
 import os

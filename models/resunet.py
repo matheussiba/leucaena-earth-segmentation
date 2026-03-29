@@ -1,3 +1,14 @@
+"""
+U-Net style encoder–decoder backbones with residual blocks.
+
+Fusion variants
+---------------
+- ``ResUnet``: early fusion — concatenate optical + LiDAR along the channel axis before encoding.
+- ``LateFusion``: two encoders + two decoders; fuse at full resolution before classification.
+- ``ResUnetOpt``: optical-only; forward uses ``x[0]`` and ignores LiDAR tensor shape.
+
+All classifiers output ``N_CLASSES`` channels with Softmax (see ``ResUnetClassifier``).
+"""
 from torch import nn
 import torch
 from .layers import ResidualBlock
@@ -147,7 +158,6 @@ class ResUnetDecoderNoSkipp(nn.Module):
         self.upsample_0 = nn.Upsample(scale_factor=2)
 
     def forward(self, x):
-        x
         #concatenate sources
         x_2u = self.upsample_2(x)
         x_2 = self.dec_block_2(x_2u)

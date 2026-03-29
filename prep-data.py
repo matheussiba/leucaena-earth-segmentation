@@ -1,16 +1,28 @@
 """
-Prepare data for leucaena binary segmentation.
+Prepare data for leucaena binary segmentation (PhD / leucaena-earth pipeline).
 
-Inputs:
-  - Optical imagery: 4-band GeoTIFF (B, G, R, NIR)
-  - LiDAR products:  multi-band GeoTIFF (CHM, intensity, ...)
-  - Mask polygons:   GeoJSON exported from leucaena.earth
+Pipeline overview for analysts
+------------------------------
+1. Load optical + optional LiDAR rasters, same grid (H×W) and georeference.
+2. Rasterize GeoJSON polygons from leucaena.earth into a pixel label mask.
+3. Slide a fixed window over the train mask; keep patches with enough
+   positive (leucaena) pixels; split indices into train / val / test.
+4. Save full-scene numpy arrays plus patch index arrays for the PyTorch loader.
 
-Outputs (in prepared/):
-  - opt_img.npy, lidar_img.npy   — normalised image arrays (HWC)
-  - label_train.npy, label_test.npy — binary label rasters
-  - train_patches.npy, val_patches.npy — patch index arrays
-  - test_label.tif — georeferenced test label raster
+Inputs
+------
+  - Optical: 4-band GeoTIFF (B, G, R, NIR)
+  - LiDAR:   multi-band GeoTIFF (CHM, intensity, …) — optional (--no-lidar)
+  - Masks:   GeoJSON polygons (train-only, or train+test split via flags)
+
+Outputs (prepared/)
+-------------------
+  - opt_img.npy, lidar_img.npy — float32, normalised per band to [0, 1]
+  - label_train.npy, label_test.npy — uint8 0/1 (and IGNORE_INDEX where used)
+  - train_patches.npy, val_patches.npy — arrays of shape (N, patch_h, patch_w)
+    storing *linear indices* into the flattened image, not patch pixels themselves
+  - test_label.tif — georeferenced test mask for evaluation / prediction overlay
+  - map.data — pickle class map (binary: trivial here; kept for compatibility)
 """
 import argparse
 import pathlib
@@ -76,6 +88,7 @@ parser.add_argument(
 
 args = parser.parse_args()
 
+# All artefacts go under prepared/; paths.PREPARED_PATH must match conf.paths + dataloader.
 os.makedirs(paths.PREPARED_PATH, exist_ok=True)
 
 outfile = os.path.join(paths.PREPARED_PATH, 'preparation.txt')
@@ -98,7 +111,7 @@ with open(outfile, 'w') as log_f:
     log('  Filtering outliers...')
     opt_img = filter_outliers(opt_img)
 
-    # Per-band normalisation to [0, 1]
+    # Min–max per band → [0, 1]. Same idea as LiDAR below; keeps scales comparable across bands.
     for b in range(opt_img.shape[-1]):
         bmin, bmax = opt_img[:, :, b].min(), opt_img[:, :, b].max()
         if bmax > bmin:
@@ -124,6 +137,8 @@ with open(outfile, 'w') as log_f:
                 lidar_img[:, :, b] = (lidar_img[:, :, b] - bmin) / (bmax - bmin)
         log('  Normalised to [0, 1]')
     else:
+        # Single dummy band so the dataloader always stacks (opt, lidar); model configs
+        # that use lidar_bands=None skip LiDAR in the network (see conf/model_1.py).
         if args.no_lidar:
             log('LiDAR disabled (--no-lidar flag)')
         else:
@@ -152,6 +167,8 @@ with open(outfile, 'w') as log_f:
     train_step = max(1, int((1 - general.PATCH_OVERLAP) * patch_size))
     log(f'Patch size: {patch_size}, step: {train_step} (overlap {general.PATCH_OVERLAP})')
 
+    # Flat row-major indices 0..H*W-1 reshaped to H×W; each sliding window picks
+    # the same spatial window from labels and from this index grid.
     idx_matrix = np.arange(h * w, dtype=np.uint32).reshape((h, w))
 
     label_patches = view_as_windows(
@@ -164,7 +181,7 @@ with open(outfile, 'w') as log_f:
 
     log(f'Total sliding windows: {label_patches.shape[0]:,}')
 
-    # Keep patches with enough leucaena pixels
+    # Positive-only sampling: drop windows that are mostly background (class imbalance).
     leucaena_fraction = np.mean(label_patches == 1, axis=(1, 2))
     keep = leucaena_fraction >= args.min_target_class
     idx_patches = idx_patches[keep]
@@ -176,7 +193,7 @@ with open(outfile, 'w') as log_f:
     n_total = idx_patches.shape[0]
 
     if have_separate:
-        # All filtered patches belong to training; test is the separate raster
+        # Train GeoJSON drives patch locations; test GeoJSON is a full raster — no patch split for test.
         n_val = int(args.val_split * n_total)
         val_idx = idx_patches[:n_val]
         train_idx = idx_patches[n_val:]
@@ -188,7 +205,8 @@ with open(outfile, 'w') as log_f:
         val_idx = idx_patches[n_test:n_test + n_val]
         train_idx = idx_patches[n_test + n_val:]
 
-        # Build test label raster from test patches
+        # Reconstruct a held-out label image: only pixels inside test patches get labels;
+        # everything else stays IGNORE_INDEX so loss/metrics can mask them out.
         test_label = np.full((h, w), general.IGNORE_INDEX, dtype=np.uint8)
         for patch in test_idx:
             rows, cols = np.unravel_index(patch.flatten(), (h, w))
@@ -208,7 +226,7 @@ with open(outfile, 'w') as log_f:
     np.save(os.path.join(paths.PREPARED_PATH, 'train_patches.npy'), train_idx)
     np.save(os.path.join(paths.PREPARED_PATH, 'val_patches.npy'), val_idx)
 
-    # Binary classification: trivial remap (no class removal needed)
+    # Kept for parity with the original tree_fusion multi-class remap file.
     remap_dict = {0: 0, 1: 1}
     save_dict(remap_dict, os.path.join(paths.PREPARED_PATH, 'map.data'))
 

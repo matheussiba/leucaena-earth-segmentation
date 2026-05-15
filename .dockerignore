@@ -1,0 +1,33 @@
+# Git and IDE
+.git
+.gitignore
+.cursor
+.vscode
+*.md
+!DOCKER.md
+
+# Python caches and local venvs
+__pycache__
+*.py[cod]
+.venv
+venv
+env
+.pytest_cache
+.mypy_cache
+
+# Large runtime data (mounted as volumes at run time)
+data
+prepared
+experiments
+
+# Raster / array artifacts
+*.npy
+*.tif
+*.tiff
+*.geojson
+*.las
+*.laz
+
+# OS junk
+.DS_Store
+Thumbs.db

@@ -28,6 +28,7 @@ from torch.nn.functional import one_hot
 import torch
 import numpy as np
 import os
+import csv
 from conf import paths, general
 import random
 
@@ -106,6 +107,103 @@ class TreeTrainDataSet(Dataset):
             ),
             label_tensor
         )
+
+
+class PatchFileDataset(Dataset):
+    """Reads (optical, label) patch pairs produced by ``prep-patches-from-tiles.py``.
+
+    Storage layout (relative to ``patches_dir``)::
+
+        opt/<patch_id>.npy   uint8  (H, W, 4)   BGRN order
+        lbl/<patch_id>.npy   uint8  (H, W)      0/1
+        manifest.csv         row per patch with a ``split`` column
+
+    The returned contract matches :class:`TreeTrainDataSet`::
+
+        ((opt_tensor, lidar_tensor), label_tensor)
+
+    so ``train.py`` works for experiment 1 unchanged. ``lidar_tensor`` is a
+    zero tensor of shape ``(1, H, W)`` (LiDAR is not used in the tile-based
+    pipeline v1).
+    """
+
+    def __init__(
+        self,
+        manifest_path,
+        split,
+        device,
+        patches_dir=None,
+        data_aug=False,
+        transformer=ToTensor(),
+        lidar_bands=None,
+    ) -> None:
+        if split not in ("train", "val", "test"):
+            raise ValueError(f"Unknown split: {split!r}")
+        if patches_dir is None:
+            patches_dir = os.path.dirname(manifest_path) or paths.PATH_PATCHES_DIR
+        self.patches_dir = patches_dir
+        self.split = split
+        self.device = device
+        self.data_aug = data_aug
+        self.transformer = transformer
+
+        with open(manifest_path, "r", newline="") as f:
+            reader = csv.DictReader(f)
+            self.records = [row for row in reader if row.get("split") == split]
+        if not self.records:
+            raise RuntimeError(
+                f"No patches with split={split!r} found in {manifest_path}"
+            )
+
+        self._opt_dir = os.path.join(patches_dir, "opt")
+        self._lbl_dir = os.path.join(patches_dir, "lbl")
+        # First label tells us the number of classes for the trainer header.
+        first_lbl = np.load(
+            os.path.join(self._lbl_dir, f"{self.records[0]['patch_id']}.npy")
+        )
+        self.n_classes = int(np.unique(first_lbl).size)
+        if self.n_classes < general.N_CLASSES:
+            # Background-only patches still count toward the binary task.
+            self.n_classes = general.N_CLASSES
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, index):
+        rec = self.records[index]
+        patch_id = rec["patch_id"]
+
+        opt_uint8 = np.load(os.path.join(self._opt_dir, f"{patch_id}.npy"))
+        lbl_uint8 = np.load(os.path.join(self._lbl_dir, f"{patch_id}.npy"))
+
+        # /255.0 -> float32 in [0, 1]; ToTensor will move HWC -> CHW.
+        opt_float = (opt_uint8.astype(np.float32) / 255.0)
+        opt_tensor = self.transformer(opt_float).to(self.device)
+
+        # Zero LiDAR placeholder keeps the (opt, lidar) tuple contract.
+        lidar_tensor = torch.zeros(
+            (1, opt_uint8.shape[0], opt_uint8.shape[1]),
+            dtype=torch.float32,
+            device=self.device,
+        )
+
+        label_tensor = torch.tensor(lbl_uint8.astype(np.int64)).to(self.device)
+
+        if self.data_aug:
+            k = random.randint(0, 3)
+            opt_tensor = torch.rot90(opt_tensor, k, (1, 2))
+            lidar_tensor = torch.rot90(lidar_tensor, k, (1, 2))
+            label_tensor = torch.rot90(label_tensor, k, (0, 1))
+            if bool(random.getrandbits(1)):
+                opt_tensor = hflip(opt_tensor)
+                lidar_tensor = hflip(lidar_tensor)
+                label_tensor = hflip(label_tensor)
+            if bool(random.getrandbits(1)):
+                opt_tensor = vflip(opt_tensor)
+                lidar_tensor = vflip(lidar_tensor)
+                label_tensor = vflip(label_tensor)
+
+        return ((opt_tensor, lidar_tensor), label_tensor)
 
 
 class TreePredDataSet(Dataset):

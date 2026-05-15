@@ -1,0 +1,9 @@
+# Python deps for the Docker image (PyTorch + CUDA come from the base image).
+# Pin versions for reproducible builds; bump intentionally when upgrading CUDA/PyTorch.
+torchvision==0.19.0
+torchmetrics==1.4.0.post0
+numpy==1.26.4
+scikit-image==0.24.0
+scikit-learn==1.5.1
+matplotlib==3.9.2
+tqdm==4.66.5

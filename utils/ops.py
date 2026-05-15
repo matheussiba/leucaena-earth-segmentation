@@ -111,6 +111,107 @@ def rasterize_geojson(geojson_path, reference_tif_path, burn_value=1, fill_value
     return result
 
 
+def rasterize_geojson_for_tile(geojson_path, tile_path, burn_value=1, fill_value=0):
+    """Rasterize polygons whose bounding box intersects ``tile_path``'s extent.
+
+    Same end-result as :func:`rasterize_geojson` but applies an OGR
+    ``SetSpatialFilter`` on the tile's bbox (transformed to the GeoJSON CRS)
+    before iterating features, so very large GeoJSONs (e.g. nationwide
+    polygons) stay cheap to rasterize against a single tile.
+
+    Args:
+        geojson_path: Path to GeoJSON file with polygon geometries.
+        tile_path: Path to the reference GeoTIFF (CRS, extent, resolution).
+        burn_value: Pixel value inside polygons (default 1 = leucaena).
+        fill_value: Background pixel value (default 0 = no leucaena).
+
+    Returns:
+        Tuple ``(label_array_HxW_uint8, n_features_used)``.
+    """
+    ref_ds = gdal.Open(tile_path, gdalconst.GA_ReadOnly)
+    if ref_ds is None:
+        raise FileNotFoundError(f'Cannot open tile: {tile_path}')
+    geo_transform = ref_ds.GetGeoTransform()
+    x_size = ref_ds.RasterXSize
+    y_size = ref_ds.RasterYSize
+    ref_srs = osr.SpatialReference()
+    ref_srs.ImportFromWkt(ref_ds.GetProjection())
+
+    # Tile bounding box in raster CRS
+    x_min = geo_transform[0]
+    y_max = geo_transform[3]
+    x_max = x_min + geo_transform[1] * x_size
+    y_min = y_max + geo_transform[5] * y_size
+
+    target_ds = gdal.GetDriverByName('MEM').Create('', x_size, y_size, 1, gdal.GDT_Byte)
+    target_ds.SetGeoTransform(geo_transform)
+    target_ds.SetProjection(ref_ds.GetProjection())
+    band = target_ds.GetRasterBand(1)
+    band.Fill(fill_value)
+
+    vec_ds = ogr.Open(geojson_path)
+    if vec_ds is None:
+        ref_ds = None
+        raise FileNotFoundError(f'Cannot open GeoJSON: {geojson_path}')
+    layer = vec_ds.GetLayer()
+    src_srs = layer.GetSpatialRef()
+
+    # Build a tile-bbox ring in the GeoJSON CRS so SetSpatialFilter is meaningful
+    ring = ogr.Geometry(ogr.wkbLinearRing)
+    ring.AddPoint(x_min, y_min)
+    ring.AddPoint(x_max, y_min)
+    ring.AddPoint(x_max, y_max)
+    ring.AddPoint(x_min, y_max)
+    ring.AddPoint(x_min, y_min)
+    bbox_poly = ogr.Geometry(ogr.wkbPolygon)
+    bbox_poly.AddGeometry(ring)
+
+    needs_reproject = (
+        src_srs is not None and not src_srs.IsSame(ref_srs)
+    )
+    if needs_reproject:
+        bbox_to_src = osr.CoordinateTransformation(ref_srs, src_srs)
+        bbox_poly_src = bbox_poly.Clone()
+        bbox_poly_src.Transform(bbox_to_src)
+        layer.SetSpatialFilter(bbox_poly_src)
+    else:
+        layer.SetSpatialFilter(bbox_poly)
+
+    n_features = layer.GetFeatureCount()
+    if n_features == 0:
+        result = band.ReadAsArray()
+        target_ds = None
+        vec_ds = None
+        ref_ds = None
+        return result, 0
+
+    if needs_reproject:
+        coord_transform = osr.CoordinateTransformation(src_srs, ref_srs)
+        mem_driver = ogr.GetDriverByName('Memory')
+        mem_ds = mem_driver.CreateDataSource('')
+        mem_layer = mem_ds.CreateLayer('reprojected', ref_srs, ogr.wkbPolygon)
+        for feat in layer:
+            geom = feat.GetGeometryRef()
+            if geom is None:
+                continue
+            geom = geom.Clone()
+            geom.Transform(coord_transform)
+            out_feat = ogr.Feature(mem_layer.GetLayerDefn())
+            out_feat.SetGeometry(geom)
+            mem_layer.CreateFeature(out_feat)
+        burn_layer = mem_layer
+    else:
+        burn_layer = layer
+
+    gdal.RasterizeLayer(target_ds, [1], burn_layer, burn_values=[burn_value])
+
+    result = band.ReadAsArray()
+    target_ds = None
+    vec_ds = None
+    ref_ds = None
+    return result, n_features
+
+
 def filter_outliers(img, bins=1000000, bth=0.001, uth=0.999, mask=[0]):
     """Clip per-band outliers based on cumulative histogram."""
     img[np.isnan(img)] = 0

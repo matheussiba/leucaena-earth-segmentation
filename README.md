@@ -14,6 +14,8 @@ Binary semantic segmentation of **Leucaena leucocephala** (leucaena) tree canopy
 3. [How the pipeline works (big picture)](#3-how-the-pipeline-works-big-picture)
 4. [Project structure](#4-project-structure)
 5. [Setup](#5-setup)
+   - [Docker on WSL (CUDA)](#docker-on-wsl-cuda)
+   - [Cheat sheet (conda vs Docker)](#cheat-sheet-conda-vs-docker)
 6. [Step-by-step usage](#6-step-by-step-usage)
 7. [Understanding the training output](#7-understanding-the-training-output)
 8. [The three experiments](#8-the-three-experiments)
@@ -163,6 +165,9 @@ leucaena-earth-segmentation/
 ├── prediction.py       # Step 3 — run the model on the full image
 ├── evaluation.py       # Step 4 — measure how good the model is
 ├── requirements.txt    # Python packages needed (pip install -r requirements.txt)
+├── Dockerfile          # CUDA + GDAL container image (see DOCKER.md)
+├── docker-compose.yml  # Run pipeline with GPU on WSL/Linux
+├── DOCKER.md           # WSL + NVIDIA Container Toolkit setup guide
 │
 ├── conf/               # Configuration — edit these files to change behaviour
 │   ├── paths.py        # Where your data files are on disk
@@ -251,6 +256,30 @@ data/
 
 Open `conf/paths.py` and verify the filenames match your actual files.
 If you named them exactly as above, no changes are needed.
+
+### Docker on WSL (CUDA)
+
+To run the pipeline in a **Linux container with GPU** (no local conda/GDAL install on Windows), see **[DOCKER.md](DOCKER.md)**.
+
+Quick start (from WSL, in the repo root):
+
+```bash
+docker compose build
+docker compose run --rm segmentation bash
+# inside container:
+python -c "import torch; print(torch.cuda.is_available())"
+```
+
+### Cheat sheet (conda vs Docker)
+
+Day-to-day **WSL + conda** vs **Docker for reproducibility** — first-time setup and every-day commands:
+
+**[CHEATSHEET.md](CHEATSHEET.md)**
+
+Two patch pipelines:
+
+- `prep-data.py` — one scene / VRT (RAM-bound, fine for ~hundreds of km²).
+- `prep-patches-from-tiles.py` — iterates a folder of tiles + a single GeoJSON, writes per-patch `.npy` files + `manifest.csv` (scales to Brazil-wide datasets). Train with `python train.py -e 1 --patch-source file`. See **[CHEATSHEET.md](CHEATSHEET.md)** for the full flow.
 
 ---
 

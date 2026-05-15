@@ -8,12 +8,15 @@ services:
       - .env
     volumes:
       - .:/workspace
-      # Host paths come from .env (see .env.example). Never commit .env.
-      - ${LEUCAENA_TILES_HOST_DIR}:/data/rgbir
-      - ${LEUCAENA_MASKS_HOST_DIR}:/data/masks
+      # WSL: use /mnt/g/... or /mnt/c/... in .env (not C:/...). Quotes needed if the path has spaces.
+      - "${LEUCAENA_TILES_HOST_DIR}:/data/rgbir"
+      - "${LEUCAENA_MASKS_HOST_DIR}:/data/masks"
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - PROJ_LIB=/opt/conda/share/proj
+      - GDAL_DATA=/opt/conda/share/gdal
+      - GTIFF_SRS_SOURCE=EPSG
       - LEUCAENA_TILES_DIR=${LEUCAENA_TILES_DIR}
       - LEUCAENA_MASKS_PATH=${LEUCAENA_MASKS_PATH}
     deploy:

@@ -5,6 +5,7 @@ The model forward is called as ``model(X)`` where ``X`` is the batch from the da
 a tuple ``(opt_batch, lidar_batch)``. Loss uses ``general.IGNORE_INDEX`` for masked pixels.
 """
 from tqdm import tqdm
+import sys
 import torch
 import os
 from torchmetrics.classification import MulticlassF1Score
@@ -28,10 +29,10 @@ def train_loop(dataloader, model, loss_fn, optimizer):
         optimizer (Optimizer): Optimizer to adjust the model's weights
 
     Returns:
-        float: average loss of the epoch
+        tuple[float, float]: (average loss, average F1) for the epoch
     """
     train_loss, f1_sum, steps = 0, 0, 0
-    pbar = tqdm(dataloader)
+    pbar = tqdm(dataloader, file=sys.stderr, dynamic_ncols=True)
     f1 = MulticlassF1Score(num_classes=general.N_CLASSES, ignore_index = general.DISCARDED_CLASS)
     
     for (X, y) in pbar:
@@ -49,9 +50,10 @@ def train_loop(dataloader, model, loss_fn, optimizer):
         loss.backward()
         optimizer.step()
 
-    loss = train_loss/steps
-    print(f"Average Training Loss: {loss:.4f}, Average F1-Score: {f1_sum/steps:.4f}")
-    return loss
+    loss = train_loss / steps
+    f1_avg = float(f1_sum / steps)
+    print(f"Average Training Loss: {loss:.4f}, Average F1-Score: {f1_avg:.4f}")
+    return loss, f1_avg
 
 def val_loop(dataloader, model, loss_fn):
     """Evaluates a validation loop epoch
@@ -62,13 +64,13 @@ def val_loop(dataloader, model, loss_fn):
         loss_fn (Module): Loss Criterion
 
     Returns:
-        float: average loss of the epoch
+        tuple[float, float]: (average loss, average F1) for the epoch
     """
     num_steps = len(dataloader)
     val_loss, f1_sum, steps = 0, 0, 0
     f1 = MulticlassF1Score(num_classes=general.N_CLASSES, ignore_index = general.DISCARDED_CLASS)
     with torch.no_grad():
-        pbar = tqdm(dataloader)
+        pbar = tqdm(dataloader, file=sys.stderr, dynamic_ncols=True)
         for X, y in pbar:
             pred = model(X)
             loss = loss_fn(pred, y)
@@ -78,8 +80,9 @@ def val_loop(dataloader, model, loss_fn):
             pbar.set_description(f'Val Loss: {val_loss/steps:.4f}, F1-Score:{f1_sum/steps:.4f}  ')
 
     val_loss /= num_steps
-    print(f"Average Validation Loss: {val_loss:.4f}, Average F1-Score: {f1_sum/steps:.4f}")
-    return val_loss
+    f1_avg = float(f1_sum / steps)
+    print(f"Average Validation Loss: {val_loss:.4f}, Average F1-Score: {f1_avg:.4f}")
+    return val_loss, f1_avg
 
 def val_sample_image(dataloader, model, path_to_samples, epoch):
     sample = next(iter(dataloader))
@@ -118,27 +121,38 @@ class EarlyStop():
         self.decorred_epochs = 0
 
     def testEpoch(self, model, val_value):
-        self.decorred_epochs+=1
+        """Returns ``(should_stop, checkpoint_saved_this_epoch)``."""
+        self.decorred_epochs += 1
+        saved = False
         if self.min_epochs is not None:
             if self.decorred_epochs <= self.min_epochs:
-                print(f'Epoch {self.decorred_epochs} from {self.min_epochs} minimum epochs. Validation value:{val_value:.4f}' )
-                return False
+                print(
+                    f'Epoch {self.decorred_epochs} from {self.min_epochs} minimum epochs. '
+                    f'Validation value:{val_value:.4f}'
+                )
+                return False, saved
         if self.better_value is None:
             self.no_change_epochs += 1
             self.better_value = val_value
-            print(f'First Validation Value {val_value:.4f}. Saving model in {self.path_to_save}' )
+            print(f'First Validation Value {val_value:.4f}. Saving model in {self.path_to_save}')
             torch.save(model.state_dict(), self.path_to_save)
-            return False
+            return False, True
         delta = -(val_value - self.better_value)
         if delta > self.min_delta:
             self.no_change_epochs = 0
-            print(f'Validation value improved from {self.better_value:.4f} to {val_value:.4f}. Saving model in {self.path_to_save}' )
+            print(
+                f'Validation value improved from {self.better_value:.4f} to {val_value:.4f}. '
+                f'Saving model in {self.path_to_save}'
+            )
             torch.save(model.state_dict(), self.path_to_save)
             self.better_value = val_value
-            return False
-        else:
-            self.no_change_epochs += 1
-            print(f'No improvement for {self.no_change_epochs}/{self.train_pat} epoch. Better Validation value is {self.better_value:.4f}' )
-            if self.no_change_epochs > self.train_pat:
-                return True
+            return False, True
+        self.no_change_epochs += 1
+        print(
+            f'No improvement for {self.no_change_epochs}/{self.train_pat} epoch. '
+            f'Better Validation value is {self.better_value:.4f}'
+        )
+        if self.no_change_epochs > self.train_pat:
+            return True, saved
+        return False, saved
 

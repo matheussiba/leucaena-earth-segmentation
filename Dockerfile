@@ -9,12 +9,15 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    PROJ_LIB=/opt/conda/share/proj \
+    GDAL_DATA=/opt/conda/share/gdal \
+    GTIFF_SRS_SOURCE=EPSG
 
 WORKDIR /workspace
 
 # GDAL via conda-forge (matches conda's libstdc++; apt+pip GDAL breaks on this base image)
-RUN conda install -y -c conda-forge gdal libstdcxx-ng \
+RUN conda install -y -c conda-forge gdal proj proj-data libstdcxx-ng \
     && conda clean -afy
 
 COPY requirements-docker.txt /tmp/requirements-docker.txt

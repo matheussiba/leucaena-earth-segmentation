@@ -10,8 +10,8 @@ Typical workflow
 
 Notes for code readers
 ----------------------
-- ``sys.stdout`` is temporarily redirected to a log file under ``experiments/.../logs/``;
-  all ``print`` output from the training block goes there (and not the console).
+- Training ``print`` output goes to the terminal **and** ``experiments/.../logs/train_<e>.txt``
+  (see ``Tee`` below). Progress bars use stderr so the log file stays readable.
 - The model receives a *tuple* ``(optical_tensor, lidar_tensor)``; see ``utils/dataloader.py``.
 - ``-c`` / ``--continue-train`` reloads ``models/model.pt`` (same experiment folder).
 """
@@ -40,6 +40,7 @@ from models.resunet import ResUnet
 from utils.ops import count_parameters
 from tqdm import tqdm   # progress bar for the training loop
 from utils.trainer import train_loop, val_loop, EarlyStop, val_sample_image
+from utils.training_log import MetricsLogger
 
 # MultiStepLR: reduces the learning rate at specific epoch milestones (step schedule).
 # ExponentialLR: multiplies the LR by gamma every epoch (smoother decay).
@@ -110,38 +111,53 @@ parser.add_argument(
     help='Manifest CSV used when --patch-source file (default: %(default)s)',
 )
 
+parser.add_argument(
+    '--cache-patches',
+    action='store_true',
+    help='Load all patches of each split into RAM once (~2 GiB for ~6k patches). '
+    'Much faster epochs; use when you have free memory.',
+)
+
 args = parser.parse_args()
+
+
+class Tee:
+    """Write stdout to the terminal and to the experiment log file."""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for stream in self.streams:
+            stream.write(data)
+            stream.flush()
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
 
 # Per-experiment folder layout mirrors the original tree_fusion project.
 exp_path = os.path.join(str(args.experiments_path), f'exp_{args.experiment}')
-if not os.path.exists(exp_path):
-    os.mkdir(exp_path)
-
-logs_path = os.path.join(exp_path, f'logs')
-if not os.path.exists(logs_path):
-    os.mkdir(logs_path)
-
-models_path = os.path.join(exp_path, f'models')
-if not os.path.exists(models_path):
-    os.mkdir(models_path)
-
-visual_path = os.path.join(exp_path, f'visual')
-if not os.path.exists(visual_path):
-    os.mkdir(visual_path)
-
-predicted_path = os.path.join(exp_path, f'predicted')
-if not os.path.exists(predicted_path):
-    os.mkdir(predicted_path)
-
-results_path = os.path.join(exp_path, f'results')
-if not os.path.exists(results_path):
-    os.mkdir(results_path)
+logs_path = os.path.join(exp_path, 'logs')
+models_path = os.path.join(exp_path, 'models')
+visual_path = os.path.join(exp_path, 'visual')
+predicted_path = os.path.join(exp_path, 'predicted')
+results_path = os.path.join(exp_path, 'results')
+for _path in (logs_path, models_path, visual_path, predicted_path, results_path):
+    os.makedirs(_path, exist_ok=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using {device} device")
 
 outfile = os.path.join(logs_path, f'train_{args.experiment}.txt')
-with open(outfile, 'w') as sys.stdout:
+_log_file = open(outfile, 'w', encoding='utf-8')
+_stdout_saved = sys.stdout
+_stderr_saved = sys.stderr
+sys.stdout = Tee(_stdout_saved, _log_file)
+sys.stderr = Tee(_stderr_saved, _log_file)
+try:
+    print(f'Logging to {outfile} (terminal + file)')
     # Dynamic import: experiment id must match an existing conf/model_<id>.py
     model_m = importlib.import_module(f'conf.model_{args.experiment}')
     model, lidar_bands = model_m.get_model()
@@ -158,6 +174,7 @@ with open(outfile, 'w') as sys.stdout:
             device=device,
             data_aug=args.data_aug,
             lidar_bands=lidar_bands,
+            cache_in_ram=args.cache_patches,
         )
         ds_val = PatchFileDataset(
             manifest_path=manifest_path,
@@ -165,6 +182,7 @@ with open(outfile, 'w') as sys.stdout:
             device=device,
             data_aug=False,
             lidar_bands=lidar_bands,
+            cache_in_ram=args.cache_patches,
         )
     else:
         path_to_patches_train = os.path.join(paths.PREPARED_PATH, 'train_patches.npy')
@@ -228,14 +246,51 @@ with open(outfile, 'w') as sys.stdout:
         gamma=general.LEARNING_RATE_SCHEDULER_GAMMA,
         verbose = True
         )
+
+    metrics_logger = MetricsLogger(logs_path)
+    metrics_logger.write_config({
+        'experiment': args.experiment,
+        'patch_source': args.patch_source,
+        'manifest': str(args.manifest) if args.patch_source == 'file' else None,
+        'batch_size': args.batch_size,
+        'data_augmentation': args.data_aug,
+        'cache_patches_in_ram': args.cache_patches,
+        'max_epochs': general.MAX_EPOCHS,
+        'learning_rate': general.LEARNING_RATE,
+        'early_stop_patience': general.EARLY_STOP_PATIENCE,
+        'device': device,
+    })
+    print(f'Metrics CSV: {metrics_logger.metrics_path}')
+
     for t in range(general.MAX_EPOCHS):
-        print(f"-------------------------------\nEpoch {t+1}")
+        epoch = t + 1
+        print(f"-------------------------------\nEpoch {epoch}")
         model.train()
-        train_loop(dataloader_train, model, loss_fn, optimizer)
+        train_loss, train_f1 = train_loop(dataloader_train, model, loss_fn, optimizer)
         model.eval()
-        val_loss = val_loop(dataloader_val, model, loss_fn)
+        val_loss, val_f1 = val_loop(dataloader_val, model, loss_fn)
         val_sample_image(dataloader_val, model, visual_path, t)
-        if early_stop.testEpoch(model = model, val_value = val_loss):
+        stop, checkpoint_saved = early_stop.testEpoch(model=model, val_value=val_loss)
+        lr = optimizer.param_groups[0]['lr']
+        metrics_logger.log_epoch(
+            epoch=epoch,
+            train_loss=train_loss,
+            train_f1=train_f1,
+            val_loss=val_loss,
+            val_f1=val_f1,
+            learning_rate=lr,
+            best_val_loss=early_stop.better_value,
+            epochs_no_improve=early_stop.no_change_epochs,
+            checkpoint_saved=checkpoint_saved,
+        )
+        if stop:
+            print(f'Early stopping at epoch {epoch}.')
             break
         scheduler.step()
-    print(f'Training time: {(time.perf_counter() - t0)/60} mins')
+    metrics_logger.close()
+    print(f'Training time: {(time.perf_counter() - t0)/60:.1f} mins')
+    print(f'Plot curves: python -m utils.plot_training -e {args.experiment}')
+finally:
+    sys.stdout = _stdout_saved
+    sys.stderr = _stderr_saved
+    _log_file.close()

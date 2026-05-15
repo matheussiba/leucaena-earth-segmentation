@@ -314,29 +314,43 @@ Para quando seus dados estão divididos em **muitos tiles** (caso típico do PhD
 
 ### Organização dos dados (uma vez)
 
-Coloque tudo **fora** do OneDrive:
+Caminhos da **sua máquina** ficam no arquivo **`.env`** (gitignored — não vai pro GitHub):
 
-```
-D:\leucaena\
-  rgbir\
-    SF-23-Y-A-IV-4-NE-F.tif
-    SF-23-Y-A-IV-4-NE-E.tif
-    ...
-  masks\
-    leucaena_polygons.geojson
+```bash
+cp .env.example .env
+# edite .env com seus caminhos no Windows
 ```
 
-`docker-compose.yml` já monta `D:\leucaena` como `/data` dentro do container.
+Layout recomendado (Google Drive / disco local):
+
+```
+G:/My Drive/PHD/02-Tese/00-datasets-ai/<dataset-id>/
+  tiles/                    # GeoTIFFs RGB+IR
+  annotations/
+    polygons.geojson        # máscaras (export leucaena.earth)
+    platform-backup/        # .db opcional (não entra no treino)
+```
+
+Exemplo no `.env` (copie de `.env.example`):
+
+```
+LEUCAENA_DATASET_ID=260515-piracicaba-aoi
+LEUCAENA_TILES_HOST_DIR=G:/My Drive/PHD/02-Tese/00-datasets-ai/260515-piracicaba-aoi/tiles
+LEUCAENA_MASKS_HOST_DIR=G:/My Drive/PHD/02-Tese/00-datasets-ai/260515-piracicaba-aoi/annotations
+LEUCAENA_MASKS_PATH=/data/masks/polygons.geojson
+```
+
+Novo experimento: crie outra pasta em `00-datasets-ai/<id>/` e atualize o `.env`.
+
+`docker-compose.yml` lê `.env` e monta as pastas no container. **Patches gerados** vão para `prepared/patches/` dentro do repo (no C:, via OneDrive).
 
 ### Gerar patches
 
 Dentro do container (`docker compose run --rm segmentation bash`):
 
 ```bash
-python prep-patches-from-tiles.py \
-  --tiles-dir /data/rgbir \
-  --masks /data/masks/leucaena_polygons.geojson \
-  --band-order RGBN
+# defaults vêm do .env via conf/paths.py — não precisa repetir caminhos:
+python prep-patches-from-tiles.py --band-order RGBN
 ```
 
 Saída em `prepared/patches/`:

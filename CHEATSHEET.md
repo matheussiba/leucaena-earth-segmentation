@@ -321,24 +321,24 @@ cp .env.example .env
 # edite .env com seus caminhos no Windows
 ```
 
-Layout recomendado (Google Drive / disco local):
+Layout recomendado (disco local **C:**, sem espaços no caminho):
 
 ```
-G:/My Drive/PHD/02-Tese/00-datasets-ai/<dataset-id>/
+C:/00_DATASETS_AI/<dataset-id>/
   tiles/                    # GeoTIFFs RGB+IR
   annotations/
     polygons.geojson        # máscaras (export leucaena.earth)
-    platform-backup/        # .db opcional (não entra no treino)
 ```
 
-Exemplo no `.env` (copie de `.env.example`):
+Exemplo no `.env` — rode **`docker compose` no WSL** com caminhos `/mnt/c/...` (não use `C:/` nem `G:/` no `.env`):
 
 ```
-LEUCAENA_DATASET_ID=260515-piracicaba-aoi
-LEUCAENA_TILES_HOST_DIR=G:/My Drive/PHD/02-Tese/00-datasets-ai/260515-piracicaba-aoi/tiles
-LEUCAENA_MASKS_HOST_DIR=G:/My Drive/PHD/02-Tese/00-datasets-ai/260515-piracicaba-aoi/annotations
+LEUCAENA_TILES_HOST_DIR=/mnt/c/00_DATASETS_AI/260515-piracicaba-aoi/tiles
+LEUCAENA_MASKS_HOST_DIR=/mnt/c/00_DATASETS_AI/260515-piracicaba-aoi/annotations
 LEUCAENA_MASKS_PATH=/data/masks/polygons.geojson
 ```
+
+**Erro `invalid volume specification`?** Use `/mnt/c/...` no `.env`, não `C:/...` nem Google Drive `G:/My Drive/...`.
 
 Novo experimento: crie outra pasta em `00-datasets-ai/<id>/` e atualize o `.env`.
 

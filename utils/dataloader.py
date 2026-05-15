@@ -136,6 +136,7 @@ class PatchFileDataset(Dataset):
         data_aug=False,
         transformer=ToTensor(),
         lidar_bands=None,
+        cache_in_ram: bool = False,
     ) -> None:
         if split not in ("train", "val", "test"):
             raise ValueError(f"Unknown split: {split!r}")
@@ -166,6 +167,28 @@ class PatchFileDataset(Dataset):
             # Background-only patches still count toward the binary task.
             self.n_classes = general.N_CLASSES
 
+        self._cache: dict[str, tuple] | None = None
+        if cache_in_ram:
+            self._build_ram_cache()
+
+    def _build_ram_cache(self) -> None:
+        """Load all patches of this split into RAM (faster epochs, ~300 KB/patch)."""
+        from tqdm import tqdm
+
+        self._cache = {}
+        n = len(self.records)
+        bytes_loaded = 0
+        for rec in tqdm(self.records, desc=f'RAM cache [{self.split}]', unit='patch'):
+            patch_id = rec['patch_id']
+            opt = np.load(os.path.join(self._opt_dir, f'{patch_id}.npy'))
+            lbl = np.load(os.path.join(self._lbl_dir, f'{patch_id}.npy'))
+            self._cache[patch_id] = (opt, lbl)
+            bytes_loaded += opt.nbytes + lbl.nbytes
+        print(
+            f'Cached {n:,} patches for split={self.split!r} '
+            f'({bytes_loaded / (1024 ** 2):.0f} MiB RAM)'
+        )
+
     def __len__(self) -> int:
         return len(self.records)
 
@@ -173,8 +196,11 @@ class PatchFileDataset(Dataset):
         rec = self.records[index]
         patch_id = rec["patch_id"]
 
-        opt_uint8 = np.load(os.path.join(self._opt_dir, f"{patch_id}.npy"))
-        lbl_uint8 = np.load(os.path.join(self._lbl_dir, f"{patch_id}.npy"))
+        if self._cache is not None:
+            opt_uint8, lbl_uint8 = self._cache[patch_id]
+        else:
+            opt_uint8 = np.load(os.path.join(self._opt_dir, f"{patch_id}.npy"))
+            lbl_uint8 = np.load(os.path.join(self._lbl_dir, f"{patch_id}.npy"))
 
         # /255.0 -> float32 in [0, 1]; ToTensor will move HWC -> CHW.
         opt_float = (opt_uint8.astype(np.float32) / 255.0)

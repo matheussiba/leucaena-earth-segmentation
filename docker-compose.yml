@@ -6,9 +6,9 @@ services:
     working_dir: /workspace
     volumes:
       - .:/workspace
-      # Tiles + masks live outside the OneDrive repo for performance/size.
-      # Create D:\leucaena\rgbir and D:\leucaena\masks on the host before running.
-      - D:/leucaena:/data
+      # Tiles + masks on the local C: drive (edit paths if yours differ).
+      - C:/Users/mathe/Downloads/rgbir:/data/rgbir
+      - C:/Users/mathe/Downloads/leucaena-earth-data:/data/masks
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility

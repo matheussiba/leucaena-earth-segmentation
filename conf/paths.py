@@ -28,8 +28,9 @@ PATH_EXPERIMENTS = os.path.join('experiments')
 PREPARED_PATH = 'prepared'
 
 # --- Tile-based patch pipeline (prep-patches-from-tiles.py) ---
-# Default tiles dir is /data/rgbir, which maps to D:\leucaena\rgbir on the host
-# via docker-compose.yml volume mount. Override with --tiles-dir on the CLI.
+# Default tiles dir is /data/rgbir inside Docker (see docker-compose.yml:
+# C:\Users\mathe\Downloads\rgbir on the host). Patches are written under
+# prepared/patches/ in this repo (also on C:, via OneDrive path).
 PATH_TILES_DIR = os.path.join(os.sep, 'data', 'rgbir')
 PATH_PATCHES_DIR = os.path.join(PREPARED_PATH, 'patches')
 PATH_PATCHES_MANIFEST = os.path.join(PATH_PATCHES_DIR, 'manifest.csv')

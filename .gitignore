@@ -134,6 +134,9 @@ dmypy.json
 data/
 prepared/
 experiments/
+
+# Local study notes (kept out of the repo on purpose)
+studies/
 *.tif
 *.tiff
 *.geojson

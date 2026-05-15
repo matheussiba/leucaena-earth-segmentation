@@ -28,7 +28,7 @@ import sys
 # Not active in the current single-model loop but left here as a starting point.
 from multiprocessing import Process
 
-from utils.dataloader import TreeTrainDataSet
+from utils.dataloader import TreeTrainDataSet, PatchFileDataset
 from torch.utils.data import DataLoader  # wraps a Dataset and produces batches automatically
 import torch
 from torch import nn
@@ -92,6 +92,24 @@ parser.add_argument( # Data Augmentation
     help = 'Use or not data augmentation'
 )
 
+parser.add_argument( # Patch source: legacy scene (prep-data.py) or new tile-based (prep-patches-from-tiles.py)
+    '--patch-source',
+    choices=('scene', 'file'),
+    default='scene',
+    help=(
+        'Where training patches come from. "scene" (default) uses prepared/*.npy '
+        'produced by prep-data.py; "file" reads individual patches via the '
+        'manifest produced by prep-patches-from-tiles.py.'
+    ),
+)
+
+parser.add_argument(
+    '--manifest',
+    type=pathlib.Path,
+    default=paths.PATH_PATCHES_MANIFEST,
+    help='Manifest CSV used when --patch-source file (default: %(default)s)',
+)
+
 args = parser.parse_args()
 
 # Per-experiment folder layout mirrors the original tree_fusion project.
@@ -129,12 +147,31 @@ with open(outfile, 'w') as sys.stdout:
     model, lidar_bands = model_m.get_model()
 
     print(f'{model.__class__.__name__}')
-    
-    path_to_patches_train = os.path.join(paths.PREPARED_PATH, 'train_patches.npy')
-    path_to_patches_val = os.path.join(paths.PREPARED_PATH, 'val_patches.npy')
+    print(f'Patch source: {args.patch_source}')
 
-    ds_train = TreeTrainDataSet(path_to_patches = path_to_patches_train, device = device, data_aug=args.data_aug, lidar_bands = lidar_bands)
-    ds_val = TreeTrainDataSet(path_to_patches = path_to_patches_val, device = device, lidar_bands = lidar_bands)
+    if args.patch_source == 'file':
+        manifest_path = str(args.manifest)
+        print(f'Manifest: {manifest_path}')
+        ds_train = PatchFileDataset(
+            manifest_path=manifest_path,
+            split='train',
+            device=device,
+            data_aug=args.data_aug,
+            lidar_bands=lidar_bands,
+        )
+        ds_val = PatchFileDataset(
+            manifest_path=manifest_path,
+            split='val',
+            device=device,
+            data_aug=False,
+            lidar_bands=lidar_bands,
+        )
+    else:
+        path_to_patches_train = os.path.join(paths.PREPARED_PATH, 'train_patches.npy')
+        path_to_patches_val = os.path.join(paths.PREPARED_PATH, 'val_patches.npy')
+
+        ds_train = TreeTrainDataSet(path_to_patches = path_to_patches_train, device = device, data_aug=args.data_aug, lidar_bands = lidar_bands)
+        ds_val = TreeTrainDataSet(path_to_patches = path_to_patches_val, device = device, lidar_bands = lidar_bands)
 
     dataloader_train = DataLoader(ds_train, batch_size=args.batch_size, shuffle=True)
     dataloader_val = DataLoader(ds_val, batch_size=args.batch_size, shuffle=False)

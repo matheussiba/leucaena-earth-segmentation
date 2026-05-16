@@ -37,3 +37,11 @@ PATH_MASKS = _env('LEUCAENA_MASKS_PATH', os.path.join('data', 'masks.geojson'))
 PATH_TILES_DIR = _env('LEUCAENA_TILES_DIR', os.path.join(os.sep, 'data', 'rgbir'))
 PATH_PATCHES_DIR = _env('LEUCAENA_PATCHES_DIR', os.path.join(PREPARED_PATH, 'patches'))
 PATH_PATCHES_MANIFEST = os.path.join(PATH_PATCHES_DIR, 'manifest.csv')
+
+# --- LiDAR tile-based pipeline (prep-lidar-rasters.py) ---
+# PATH_LAZ_DIR  : folder with raw .laz/.las point clouds (input to prep-lidar-rasters.py).
+# PATH_LIDAR_DIR: folder with the resulting 2-band GeoTIFFs (CHM, INTENSITY) that
+#                 prep-patches-from-tiles.py reads alongside RGBN tiles.
+PATH_LAZ_DIR = _env('LEUCAENA_LAZ_DIR', os.path.join(os.sep, 'data', 'laz'))
+PATH_LIDAR_DIR = _env('LEUCAENA_LIDAR_DIR', os.path.join(os.sep, 'data', 'lidar'))
+PATH_LIDAR_MANIFEST = os.path.join(PATH_LIDAR_DIR, 'lidar_manifest.csv')

@@ -34,9 +34,21 @@ Inputs
 
 Outputs
 -------
-- ``<out-dir>/opt/<patch_id>.npy``  uint8  (H, W, 4)
-- ``<out-dir>/lbl/<patch_id>.npy``  uint8  (H, W)
-- ``<out-dir>/manifest.csv``         columns described below
+- ``<out-dir>/opt/<patch_id>.npy``    uint8    (H, W, 4)
+- ``<out-dir>/lbl/<patch_id>.npy``    uint8    (H, W)
+- ``<out-dir>/lidar/<patch_id>.npy``  float32  (H, W, k)  *(only when --lidar-dir is set)*
+- ``<out-dir>/manifest.csv``           columns described below
+
+LiDAR mode (optional)
+---------------------
+When ``--lidar-dir`` is set, the script also extracts the same windows from
+the matching LiDAR raster (produced by ``prep-lidar-rasters.py``). The match
+is by stem: ``<tile_name>.tif`` in ``--tiles-dir`` pairs with
+``<tile_name>.tif`` in ``--lidar-dir``. Patches with no matching LiDAR tile
+are still written for the optical and label branches, with
+``has_lidar=False`` in the manifest. ``PatchFileDataset`` falls back to a
+zero LiDAR tensor for those rows, so the dataset stays usable for
+experiment 1 (optical-only) regardless.
 """
 from __future__ import annotations
 
@@ -47,7 +59,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, asdict
-from typing import Iterable
+from typing import Iterable, Optional
 
 import numpy as np
 from osgeo import gdal, gdalconst
@@ -59,7 +71,12 @@ from utils.ops import rasterize_geojson_for_tile
 
 @dataclass
 class PatchRecord:
-    """One row of the manifest. ``split`` is filled after the global shuffle."""
+    """One row of the manifest. ``split`` is filled after the global shuffle.
+
+    LiDAR-specific fields (``lidar_tile_name``, ``has_lidar``) stay at their
+    defaults when ``--lidar-dir`` is not used, which keeps backwards
+    compatibility with manifests produced before LiDAR support.
+    """
 
     patch_id: str
     tile_name: str
@@ -70,6 +87,8 @@ class PatchRecord:
     win: int
     leucaena_fraction: float
     split: str = ""
+    lidar_tile_name: str = ""
+    has_lidar: bool = False
 
 
 def _parse_args() -> argparse.Namespace:
@@ -146,6 +165,19 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="If set, process only the first N tiles (debug).",
     )
+    p.add_argument(
+        "--lidar-dir",
+        default=None,
+        help="Folder with LiDAR GeoTIFFs aligned to the RGBN tiles "
+        "(produced by prep-lidar-rasters.py). Same stem as the RGBN tile. "
+        "If set, lidar/<patch_id>.npy is also written. "
+        "Default (None) keeps the optical-only behaviour.",
+    )
+    p.add_argument(
+        "--lidar-glob",
+        default="*.tif",
+        help="Filename pattern under --lidar-dir (default: %(default)s)",
+    )
     return p.parse_args()
 
 
@@ -186,6 +218,43 @@ def _read_window_BGRN(
     return out
 
 
+def _read_window_lidar(
+    ds: gdal.Dataset, xoff: int, yoff: int, win: int
+) -> np.ndarray:
+    """Read a (win, win, n_bands) float32 window from a LiDAR raster.
+
+    No-data pixels become 0 so downstream training has well-defined inputs.
+    """
+    n_bands = ds.RasterCount
+    out = np.empty((win, win, n_bands), dtype=np.float32)
+    for b in range(n_bands):
+        band = ds.GetRasterBand(b + 1)
+        arr = band.ReadAsArray(xoff, yoff, win, win)
+        if arr is None:
+            raise IOError(
+                f"GDAL ReadAsArray returned None for LiDAR band {b + 1} at "
+                f"({xoff}, {yoff}, {win}, {win})"
+            )
+        arr = arr.astype(np.float32, copy=False)
+        nodata = band.GetNoDataValue()
+        if nodata is not None:
+            arr[np.isclose(arr, float(nodata))] = 0.0
+        arr[~np.isfinite(arr)] = 0.0
+        out[:, :, b] = arr
+    return out
+
+
+def _find_lidar_tile(tile_name: str, lidar_dir: Optional[str]) -> Optional[str]:
+    """Look up ``<lidar_dir>/<tile_name>.tif`` (or ``.tiff``). Returns None if missing."""
+    if not lidar_dir:
+        return None
+    for ext in (".tif", ".tiff"):
+        candidate = os.path.join(lidar_dir, tile_name + ext)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def _process_tile(
     tile_path: str,
     geojson_path: str,
@@ -194,6 +263,7 @@ def _process_tile(
     overlap: float,
     min_target_class: float,
     band_order: str,
+    lidar_dir: Optional[str],
     log,
 ) -> list[PatchRecord]:
     tile_name = os.path.splitext(os.path.basename(tile_path))[0]
@@ -217,6 +287,26 @@ def _process_tile(
         ds = None
         return []
 
+    # --- LiDAR raster lookup (optional) ---------------------------------
+    lidar_path = _find_lidar_tile(tile_name, lidar_dir)
+    lidar_ds: Optional[gdal.Dataset] = None
+    if lidar_dir:
+        if lidar_path is None:
+            log(f"  [WARN] no LiDAR tile for {tile_name}; falling back to zeros at train time.")
+        else:
+            lidar_ds = gdal.Open(lidar_path, gdalconst.GA_ReadOnly)
+            if lidar_ds is None:
+                log(f"  [WARN] cannot open LiDAR tile: {lidar_path}; falling back to zeros.")
+            elif (lidar_ds.RasterXSize, lidar_ds.RasterYSize) != (width, height):
+                log(
+                    f"  [WARN] LiDAR shape {lidar_ds.RasterXSize}x{lidar_ds.RasterYSize} "
+                    f"differs from RGBN {width}x{height}; falling back to zeros. "
+                    "Re-run prep-lidar-rasters.py with --tiles-dir set."
+                )
+                lidar_ds = None
+            else:
+                log(f"  lidar    : {os.path.basename(lidar_path)} ({lidar_ds.RasterCount} bands)")
+
     step = max(1, int((1 - overlap) * patch_size))
     label_windows = view_as_windows(label, (patch_size, patch_size), step)
     grid_rows, grid_cols = label_windows.shape[:2]
@@ -231,20 +321,26 @@ def _process_tile(
     )
     if n_keep == 0:
         ds = None
+        if lidar_ds is not None:
+            lidar_ds = None
         return []
 
     src_order_idx = _band_reorder_indices(band_order)
 
     opt_dir = os.path.join(out_dir, "opt")
     lbl_dir = os.path.join(out_dir, "lbl")
+    lidar_out_dir = os.path.join(out_dir, "lidar")
     os.makedirs(opt_dir, exist_ok=True)
     os.makedirs(lbl_dir, exist_ok=True)
+    if lidar_ds is not None:
+        os.makedirs(lidar_out_dir, exist_ok=True)
 
     records: list[PatchRecord] = []
     grid_idx_flat = np.arange(grid_rows * grid_cols).reshape(grid_rows, grid_cols)
     rows_kept, cols_kept = np.unravel_index(
         np.flatnonzero(keep_mask), (grid_rows, grid_cols)
     )
+    n_lidar_written = 0
     for r, c in zip(rows_kept, cols_kept):
         xoff = int(c * step)
         yoff = int(r * step)
@@ -260,6 +356,13 @@ def _process_tile(
         np.save(os.path.join(opt_dir, f"{patch_id}.npy"), opt_patch)
         np.save(os.path.join(lbl_dir, f"{patch_id}.npy"), lbl_patch)
 
+        has_lidar = False
+        if lidar_ds is not None:
+            lidar_patch = _read_window_lidar(lidar_ds, xoff, yoff, patch_size)
+            np.save(os.path.join(lidar_out_dir, f"{patch_id}.npy"), lidar_patch)
+            has_lidar = True
+            n_lidar_written += 1
+
         records.append(
             PatchRecord(
                 patch_id=patch_id,
@@ -270,11 +373,15 @@ def _process_tile(
                 yoff=yoff,
                 win=patch_size,
                 leucaena_fraction=float(fraction[grid_idx_flat[r, c]]),
+                lidar_tile_name=os.path.basename(lidar_path) if has_lidar and lidar_path else "",
+                has_lidar=has_lidar,
             )
         )
 
     ds = None
-    log(f"  wrote {len(records):,} patches")
+    if lidar_ds is not None:
+        lidar_ds = None
+    log(f"  wrote {len(records):,} patches (lidar={n_lidar_written:,})")
     return records
 
 
@@ -305,26 +412,12 @@ def _assign_splits(
 def _write_manifest(records: Iterable[PatchRecord], path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     records = list(records)
-    if not records:
-        # Still write a header-only file so downstream tools detect the empty run.
-        with open(path, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(
-                [
-                    "patch_id",
-                    "tile_name",
-                    "row",
-                    "col",
-                    "xoff",
-                    "yoff",
-                    "win",
-                    "leucaena_fraction",
-                    "split",
-                ]
-            )
-        return
+    # The dataclass field order is the canonical manifest schema; use it for
+    # both the empty-run header and the populated case so a reader can rely
+    # on the columns being present even when no patches were kept.
+    fieldnames = list(PatchRecord.__dataclass_fields__.keys())
     with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(asdict(records[0]).keys()))
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for rec in records:
             writer.writerow(asdict(rec))
@@ -353,6 +446,7 @@ def main() -> None:
         log(f"band_order (src)  : {args.band_order} -> stored as BGRN")
         log(f"splits            : test={args.test_split}  val={args.val_split}")
         log(f"seed              : {args.seed}")
+        log(f"lidar_dir         : {args.lidar_dir or '(disabled)'}")
 
         if not os.path.isdir(args.tiles_dir):
             log(f"[ABORT] tiles dir not found: {args.tiles_dir}")
@@ -360,6 +454,11 @@ def main() -> None:
         if not os.path.isfile(args.masks):
             log(f"[ABORT] masks file not found: {args.masks}")
             sys.exit(2)
+        if args.lidar_dir and not os.path.isdir(args.lidar_dir):
+            log(
+                f"[WARN] lidar_dir not found: {args.lidar_dir} "
+                "-> continuing without LiDAR (manifest rows will have has_lidar=False)."
+            )
 
         tile_paths = _list_tiles(args.tiles_dir, args.tiles_glob, args.max_tiles)
         log(f"Found {len(tile_paths)} tile(s)")
@@ -380,6 +479,7 @@ def main() -> None:
                     overlap=args.overlap,
                     min_target_class=args.min_target_class,
                     band_order=args.band_order,
+                    lidar_dir=args.lidar_dir,
                     log=log,
                 )
             except Exception as exc:  # noqa: BLE001 - keep processing other tiles

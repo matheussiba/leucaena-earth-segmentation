@@ -110,21 +110,31 @@ class TreeTrainDataSet(Dataset):
 
 
 class PatchFileDataset(Dataset):
-    """Reads (optical, label) patch pairs produced by ``prep-patches-from-tiles.py``.
+    """Reads patch triplets produced by ``prep-patches-from-tiles.py``.
 
     Storage layout (relative to ``patches_dir``)::
 
-        opt/<patch_id>.npy   uint8  (H, W, 4)   BGRN order
-        lbl/<patch_id>.npy   uint8  (H, W)      0/1
-        manifest.csv         row per patch with a ``split`` column
+        opt/<patch_id>.npy     uint8    (H, W, 4)   BGRN order
+        lbl/<patch_id>.npy     uint8    (H, W)      0/1
+        lidar/<patch_id>.npy   float32  (H, W, k)   CHM, INTENSITY, ...   (optional)
+        manifest.csv           row per patch with ``split`` and ``has_lidar`` columns
 
     The returned contract matches :class:`TreeTrainDataSet`::
 
         ((opt_tensor, lidar_tensor), label_tensor)
 
-    so ``train.py`` works for experiment 1 unchanged. ``lidar_tensor`` is a
-    zero tensor of shape ``(1, H, W)`` (LiDAR is not used in the tile-based
-    pipeline v1).
+    LiDAR handling
+    --------------
+    - If a ``lidar/<patch_id>.npy`` file exists (produced by passing
+      ``--lidar-dir`` to ``prep-patches-from-tiles.py``), it is loaded,
+      band-selected via ``lidar_bands``, and scaled with the fixed clip
+      constants in ``conf.general`` so that the network input lives in
+      ``[0, 1]``.
+    - If it does not exist, a zero LiDAR tensor of shape ``(1, H, W)`` is
+      returned. This keeps experiment 1 (optical-only) working unchanged.
+
+    ``has_lidar`` is read from the manifest when present; otherwise the
+    presence of the ``.npy`` file is the authoritative signal.
     """
 
     def __init__(
@@ -147,6 +157,7 @@ class PatchFileDataset(Dataset):
         self.device = device
         self.data_aug = data_aug
         self.transformer = transformer
+        self.lidar_bands = lidar_bands
 
         with open(manifest_path, "r", newline="") as f:
             reader = csv.DictReader(f)
@@ -158,6 +169,8 @@ class PatchFileDataset(Dataset):
 
         self._opt_dir = os.path.join(patches_dir, "opt")
         self._lbl_dir = os.path.join(patches_dir, "lbl")
+        self._lidar_dir = os.path.join(patches_dir, "lidar")
+        self._lidar_dir_exists = os.path.isdir(self._lidar_dir)
         # First label tells us the number of classes for the trainer header.
         first_lbl = np.load(
             os.path.join(self._lbl_dir, f"{self.records[0]['patch_id']}.npy")
@@ -171,6 +184,15 @@ class PatchFileDataset(Dataset):
         if cache_in_ram:
             self._build_ram_cache()
 
+    def _has_lidar_for(self, rec: dict, patch_id: str) -> bool:
+        """Authoritative check: prefer manifest column, fall back to filesystem."""
+        if not self._lidar_dir_exists:
+            return False
+        flag = rec.get("has_lidar")
+        if flag is not None and flag != "":
+            return str(flag).strip().lower() in ("true", "1", "yes")
+        return os.path.isfile(os.path.join(self._lidar_dir, f"{patch_id}.npy"))
+
     def _build_ram_cache(self) -> None:
         """Load all patches of this split into RAM (faster epochs, ~300 KB/patch)."""
         from tqdm import tqdm
@@ -182,12 +204,34 @@ class PatchFileDataset(Dataset):
             patch_id = rec['patch_id']
             opt = np.load(os.path.join(self._opt_dir, f'{patch_id}.npy'))
             lbl = np.load(os.path.join(self._lbl_dir, f'{patch_id}.npy'))
-            self._cache[patch_id] = (opt, lbl)
+            lidar = None
+            if self._has_lidar_for(rec, patch_id):
+                lidar = np.load(os.path.join(self._lidar_dir, f'{patch_id}.npy'))
+                bytes_loaded += lidar.nbytes
+            self._cache[patch_id] = (opt, lbl, lidar)
             bytes_loaded += opt.nbytes + lbl.nbytes
         print(
             f'Cached {n:,} patches for split={self.split!r} '
             f'({bytes_loaded / (1024 ** 2):.0f} MiB RAM)'
         )
+
+    def _scale_lidar(self, lidar_arr: np.ndarray) -> np.ndarray:
+        """Apply fixed [0, 1] scaling per LiDAR band.
+
+        Band order on disk matches ``general.BAND_NAMES_LIDAR``:
+        ``[CHM, INTENSITY, ...]``. CHM is divided by ``LIDAR_CHM_MAX_M``;
+        every other band by ``LIDAR_INTENSITY_MAX``. Values are clipped to
+        ``[0, 1]`` so the network sees a well-defined range regardless of
+        a few outlier pixels left over from rasterisation.
+        """
+        scaled = np.empty_like(lidar_arr, dtype=np.float32)
+        for b in range(lidar_arr.shape[-1]):
+            if b < len(general.BAND_NAMES_LIDAR) and general.BAND_NAMES_LIDAR[b].upper() == "CHM":
+                denom = float(general.LIDAR_CHM_MAX_M)
+            else:
+                denom = float(general.LIDAR_INTENSITY_MAX)
+            scaled[:, :, b] = np.clip(lidar_arr[:, :, b].astype(np.float32) / denom, 0.0, 1.0)
+        return scaled
 
     def __len__(self) -> int:
         return len(self.records)
@@ -197,21 +241,30 @@ class PatchFileDataset(Dataset):
         patch_id = rec["patch_id"]
 
         if self._cache is not None:
-            opt_uint8, lbl_uint8 = self._cache[patch_id]
+            opt_uint8, lbl_uint8, lidar_arr = self._cache[patch_id]
         else:
             opt_uint8 = np.load(os.path.join(self._opt_dir, f"{patch_id}.npy"))
             lbl_uint8 = np.load(os.path.join(self._lbl_dir, f"{patch_id}.npy"))
+            lidar_arr = None
+            if self._has_lidar_for(rec, patch_id):
+                lidar_arr = np.load(os.path.join(self._lidar_dir, f"{patch_id}.npy"))
 
         # /255.0 -> float32 in [0, 1]; ToTensor will move HWC -> CHW.
         opt_float = (opt_uint8.astype(np.float32) / 255.0)
         opt_tensor = self.transformer(opt_float).to(self.device)
 
-        # Zero LiDAR placeholder keeps the (opt, lidar) tuple contract.
-        lidar_tensor = torch.zeros(
-            (1, opt_uint8.shape[0], opt_uint8.shape[1]),
-            dtype=torch.float32,
-            device=self.device,
-        )
+        if lidar_arr is not None:
+            scaled = self._scale_lidar(lidar_arr)
+            if self.lidar_bands is not None:
+                scaled = scaled[:, :, self.lidar_bands]
+            lidar_tensor = self.transformer(scaled).to(self.device)
+        else:
+            # Zero LiDAR placeholder keeps the (opt, lidar) tuple contract.
+            lidar_tensor = torch.zeros(
+                (1, opt_uint8.shape[0], opt_uint8.shape[1]),
+                dtype=torch.float32,
+                device=self.device,
+            )
 
         label_tensor = torch.tensor(lbl_uint8.astype(np.int64)).to(self.device)
 

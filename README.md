@@ -281,6 +281,10 @@ Two patch pipelines:
 - `prep-data.py` — one scene / VRT (RAM-bound, fine for ~hundreds of km²).
 - `prep-patches-from-tiles.py` — iterates a folder of tiles + a single GeoJSON, writes per-patch `.npy` files + `manifest.csv` (scales to Brazil-wide datasets). Train with `python train.py -e 1 --patch-source file`. See **[CHEATSHEET.md](CHEATSHEET.md)** for the full flow.
 
+LiDAR rasterisation (only needed for experiments 2 / 3):
+
+- `prep-lidar-rasters.py` — converts a folder of `.laz` point clouds into 2-band GeoTIFFs (`CHM`, `INTENSITY`) aligned to your RGBN tiles using PDAL + GDAL. Once you point `prep-patches-from-tiles.py --lidar-dir` at the output, the dataset feeds real LiDAR to the network and unlocks early/late fusion. See the **Pipeline LiDAR** section in [CHEATSHEET.md](CHEATSHEET.md) for the LAZ → patch flow.
+
 ---
 
 ## 6. Step-by-step usage

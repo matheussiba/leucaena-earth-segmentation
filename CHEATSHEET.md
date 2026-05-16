@@ -246,14 +246,17 @@ docker compose run --rm segmentation python train.py -e 1 -b 8
 
 | Arquivo | Função |
 |---------|--------|
-| `prep-data.py` | GeoTIFF + máscaras → `prepared/*.npy` |
+| `prep-data.py` | GeoTIFF + máscaras → `prepared/*.npy` (cena única, RAM) |
+| `prep-patches-from-tiles.py` | Pasta de tiles + GeoJSON → `prepared/patches/` (escalável) |
+| `prep-lidar-rasters.py` | LAZ → 2-band TIF (CHM, INTENSITY) alinhado ao RGBN |
 | `train.py` | Treina → `experiments/exp_N/models/model.pt` |
 | `prediction.py` | Mapa completo → `experiments/exp_N/predicted/` |
 | `evaluation.py` | Métricas → `experiments/exp_N/logs/eval_N.txt` |
-| `conf/paths.py` | Caminhos dos arquivos em `data/` |
-| `conf/general.py` | Patch size, LR, early stopping |
-| `Dockerfile` | Receita da imagem Docker |
-| `docker-compose.yml` | Como subir container (GPU + pasta) |
+| `utils/lidar.py` | Helpers PDAL + GDAL (pipelines, alinhamento, CHM) |
+| `conf/paths.py` | Caminhos dos arquivos em `data/` e tile dirs |
+| `conf/general.py` | Patch size, LR, early stopping, normalização LiDAR |
+| `Dockerfile` | Receita da imagem Docker (CUDA + GDAL + PDAL) |
+| `docker-compose.yml` | Como subir container (GPU + pastas montadas) |
 | `DOCKER.md` | Guia longo Docker + troubleshooting |
 | `CHEATSHEET.md` | Este arquivo |
 
@@ -386,6 +389,139 @@ Sem `--patch-source file`, treina pelo caminho antigo (`prep-data.py`). Prediç�
 ### Como o split funciona
 
 Splits são feitos **no nível de patch** com `--seed` (default 42). Patches do mesmo tile podem aparecer em splits diferentes — para evitar isso (mais rigoroso), o próximo passo é usar `--split-by tile`, ainda não implementado.
+
+---
+
+# Pipeline LiDAR — do `.laz` ao patch
+
+Use quando você tem **nuvem de pontos LiDAR** (`.laz` / `.copc.laz`) e quer treinar
+os experimentos `2` (early fusion) ou `3` (late fusion). O caminho tile-based espera
+**rasters LiDAR alinhados aos RGBN** — não a nuvem bruta. Esse pipeline faz a
+conversão.
+
+### Fluxo em 3 passos
+
+```
+D:/laz/<tile>.laz                       (entrada — nuvem de pontos)
+        │
+        ▼
+[ 1. prep-lidar-rasters.py ]            (PDAL → DSM/DTM/Intensity, CHM = DSM − DTM)
+        │
+        ▼
+C:/00_DATASETS_AI/.../lidar/<tile>.tif  (2 bandas float32: CHM, INTENSITY,
+                                         mesmo grid do RGBN)
+        │
+        ▼
+[ 2. prep-patches-from-tiles.py --lidar-dir ... ]
+        │
+        ▼
+prepared/patches/lidar/<patch_id>.npy   (256×256×2 float32, alinhado ao opt/lbl)
+        │
+        ▼
+[ 3. train.py -e 2  (ou -e 3) --patch-source file ]
+```
+
+### Pré-requisitos
+
+- **No Docker**: a imagem já inclui PDAL (`docker compose build` se ainda não fez).
+- **No conda (caminho A)**: `conda install -y -c conda-forge pdal python-pdal`.
+
+### Configurar os caminhos (`.env`)
+
+```env
+# LAZ na sua máquina (D:\laz monta como /mnt/d/laz no WSL)
+LEUCAENA_LAZ_HOST_DIR=/mnt/d/laz
+LEUCAENA_LIDAR_HOST_DIR=/mnt/c/00_DATASETS_AI/260515-piracicaba-aoi/lidar
+LEUCAENA_LAZ_DIR=/data/laz       # caminho dentro do container (não mudar)
+LEUCAENA_LIDAR_DIR=/data/lidar   # idem
+```
+
+`docker compose run --rm segmentation bash` monta `/data/laz` (somente leitura
+prática — você não escreve aqui) e `/data/lidar` (saída).
+
+### 1. Rasterizar LAZ → 2-band TIF
+
+```bash
+# --- escala TESTE (1–2 tiles, valida toolchain antes de 300 horas) ---
+python prep-lidar-rasters.py --max-tiles 2
+
+# --- inspeção rápida sem produzir nada (só metadados PDAL + match RGBN) ---
+python prep-lidar-rasters.py --inspect-only --max-tiles 5
+
+# --- escala FINAL (todos os LAZ que têm RGBN correspondente) ---
+python prep-lidar-rasters.py
+```
+
+Resultado em `/data/lidar/` (mapeado para `C:\00_DATASETS_AI\.../lidar` no host):
+
+- `<tile>.tif` — 2 bandas float32 `[CHM, INTENSITY]`, mesmo grid do RGBN
+- `lidar_manifest.csv` — uma linha por LAZ: `status` (`ok` / `skip-no-rgbn` /
+  `skip-existing` / `error`), `n_points`, dimensões, tempo, mensagem de erro.
+- `preparation.txt` — log completo do batch.
+
+### 2. Gerar patches com LiDAR
+
+```bash
+python prep-patches-from-tiles.py \
+    --lidar-dir /data/lidar \
+    --band-order RGBN
+```
+
+Saída em `prepared/patches/`:
+
+- `opt/<patch_id>.npy`   uint8 (256×256×4 BGRN)
+- `lbl/<patch_id>.npy`   uint8 (256×256)
+- `lidar/<patch_id>.npy` **float32 (256×256×2)** — só para tiles que tinham LiDAR
+- `manifest.csv` agora com colunas extras `lidar_tile_name`, `has_lidar`
+
+> Patches sem LiDAR ficam com `has_lidar=False`. O `PatchFileDataset` devolve
+> tensor de zeros para eles, então treinar `-e 1` (óptico) continua valendo
+> mesmo com manifesto misto.
+
+### 3. Treinar com fusão
+
+```bash
+python train.py -e 2 -b 8 --patch-source file   # early fusion
+python train.py -e 3 -b 4 --patch-source file   # late fusion (mais memória)
+```
+
+### Sintonia rápida do `prep-lidar-rasters.py`
+
+| Flag | Default | Para que serve |
+|------|---------|----------------|
+| `--laz-dir` | `/data/laz` | Pasta com `.laz` / `.copc.laz` |
+| `--tiles-dir` | `/data/rgbir` | RGBN de referência (alinhamento de grid) |
+| `--out-dir` | `/data/lidar` | Onde grava os `.tif` 2-band |
+| `--resolution` | `1.0` m | Resolução do raster PDAL antes do warp |
+| `--chm-max-m` | `50.0` | Cap do CHM (filtra spikes) |
+| `--max-tiles` | — | Processa só N LAZ (debug) |
+| `--require-rgbn` / `--no-require-rgbn` | `True` | Pular LAZ sem RGBN correspondente |
+| `--overwrite` | `False` | Refazer mesmo se o `.tif` já existe |
+| `--inspect-only` | `False` | Só imprime metadados PDAL, sem rasterizar |
+
+### Como o casamento LAZ ↔ RGBN funciona
+
+Por **stem** (nome do arquivo sem extensão), com `.copc` removido:
+
+```
+D:\laz\SF-23-Y-A-IV-2-SE-E-I.copc.laz   →   stem = SF-23-Y-A-IV-2-SE-E-I
+C:\...\tiles\SF-23-Y-A-IV-2-SE-E-I.tif  →   match!
+```
+
+Se você quiser um mapeamento não-trivial (nomes diferentes), o caminho mais
+limpo é renomear os RGBN para casar com o LAZ (ou vice-versa). Um suporte a
+`--mapping-csv` está na lista de futuros.
+
+### Constantes que dá pra mexer (em `conf/general.py`)
+
+| Constante | Valor | Efeito |
+|-----------|-------|--------|
+| `LIDAR_RASTER_RESOLUTION_M` | `1.0` | Resolução intermediária do PDAL |
+| `LIDAR_CHM_MAX_M` | `50.0` | Tudo acima vira 50 m. CHM em [0, 1] = altura/50 |
+| `LIDAR_INTENSITY_MAX` | `32768` | Divisor para intensidade. Idem [0, 1] |
+
+Essas três regem a normalização final que vai para a rede. Não precisa nada
+extra no dataloader: ele lê `lidar/<id>.npy` e aplica a regra automaticamente.
 
 ---
 

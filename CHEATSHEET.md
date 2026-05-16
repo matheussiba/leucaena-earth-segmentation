@@ -250,8 +250,11 @@ docker compose run --rm segmentation python train.py -e 1 -b 8
 | `prep-patches-from-tiles.py` | Pasta de tiles + GeoJSON → `prepared/patches/` (escalável) |
 | `prep-lidar-rasters.py` | LAZ → 2-band TIF (CHM, INTENSITY) alinhado ao RGBN |
 | `train.py` | Treina → `experiments/exp_N/models/model.pt` |
-| `prediction.py` | Mapa completo → `experiments/exp_N/predicted/` |
+| `prediction.py` | Cena única (legado) → `experiments/exp_N/predicted/` |
+| `predict-tiles.py` | **Inferência tile-by-tile, escalável** → `$LEUCAENA_PREDICTIONS_DIR/exp_N/` |
+| `predict-tile-preview.py` | PNG triptych + F1 num único tile (sanity check) |
 | `evaluation.py` | Métricas → `experiments/exp_N/logs/eval_N.txt` |
+| `utils/inference.py` | Helpers de sliding-window + escrita de prob TIF |
 | `utils/lidar.py` | Helpers PDAL + GDAL (pipelines, alinhamento, CHM) |
 | `conf/paths.py` | Caminhos dos arquivos em `data/` e tile dirs |
 | `conf/general.py` | Patch size, LR, early stopping, normalização LiDAR |
@@ -522,6 +525,87 @@ limpo é renomear os RGBN para casar com o LAZ (ou vice-versa). Um suporte a
 
 Essas três regem a normalização final que vai para a rede. Não precisa nada
 extra no dataloader: ele lê `lidar/<id>.npy` e aplica a regra automaticamente.
+
+---
+
+# Predição em escala (tile-by-tile)
+
+Use quando você quiser **rodar inferência sobre muitos tiles** sem mosaicar
+nada em RAM. `prediction.py` carrega a cena inteira; `predict-tiles.py` itera
+tile por tile e gera GeoTIFFs georreferenciados que o QGIS abre como mosaico
+via VRT. Discussão didática em `studies/predicao-em-escala.md`.
+
+### Onde a saída vai parar
+
+**Fora do OneDrive** — uma rodada estado/país pode gerar dezenas de GB. Caminho
+controlado pelo `.env`:
+
+```env
+LEUCAENA_PREDICTIONS_HOST_DIR=/mnt/d/leucaena-predictions  # disco local
+LEUCAENA_PREDICTIONS_DIR=/data/predictions                  # dentro do container
+```
+
+Estrutura por experimento (default `$LEUCAENA_PREDICTIONS_DIR/exp_<N>/`):
+
+```
+<stem>_pred.tif   uint8   mapa de classe (0 = fundo, 1 = leucaena)
+<stem>_prob.tif   uint16  prob da classe 1, scale_factor = 1/65535  (default)
+pred.vrt          mosaico virtual de todos os *_pred.tif
+prob.vrt          mosaico virtual de todos os *_prob.tif
+manifest.csv      uma linha por tile (status, lidar_status, frac_leucaena, ...)
+predict_<N>.txt   log completo
+```
+
+### Comandos típicos
+
+```bash
+# default: todos os tiles em PATH_TILES_DIR, overlaps [0, 0.25, 0.5],
+# probabilidade gravada em uint16 (2 bytes/pixel) com scale_factor
+python predict-tiles.py -e 1
+
+# preview rápido: 3 tiles, uma única passada, sem média de overlaps
+python predict-tiles.py -e 1 --max-tiles 3 --overlap 0
+
+# experimento de fusão (LiDAR real; tiles sem LiDAR usam zeros + log)
+python predict-tiles.py -e 3 --lidar-dir /data/lidar
+
+# manter prob em float32 (4 bytes/pixel) se quiser análise crua
+python predict-tiles.py -e 1 --prob-dtype float32
+```
+
+### Flag-a-flag
+
+| Flag | Default | Para que serve |
+|------|---------|----------------|
+| `-e` | (obrigatório) | Número do experimento (carrega `experiments/exp_<e>/models/model.pt`) |
+| `--tiles-dir` | `PATH_TILES_DIR` (`.env`) | Pasta dos RGBN |
+| `--tiles-glob` | `*.tif` | Filtro de nomes |
+| `--lidar-dir` | `PATH_LIDAR_DIR` | Só usado se o modelo é multimodal |
+| `--out-dir` | `$PREDICTIONS_DIR/exp_<e>` | Override do destino |
+| `--band-order` | `RGBN` | Bate com o treinamento |
+| `-b/--batch-size` | `128` | Batch da inferência |
+| `--overlaps` | `0,0.25,0.5` | Lista averageada |
+| `--overlap` | — | Valor único; sobrescreve `--overlaps` (preview) |
+| `--save-prob` / `--no-save-prob` | `True` | Gravar `_prob.tif` |
+| `--prob-dtype` | `uint16` | `float32` \| `uint16` \| `uint8` |
+| `--max-tiles` | `0` (todos) | Limita para debug |
+| `--overwrite` | `False` | Refaz tiles já gravados |
+| `--no-build-vrt` | (constrói por padrão) | Pula `gdalbuildvrt` no fim |
+| `--device` | `auto` | `auto` \| `cuda` \| `cpu` |
+
+### Por que `uint16` na probabilidade?
+
+GeoTIFF/GDAL **não** têm Float16 nativo. O padrão científico para "prob em meio
+da precisão" é `uint16 + scale_factor = 1/65535`: 2 bytes por pixel, 65 536
+níveis, lido como `[0, 1]` em QGIS/rasterio sem código extra. Detalhes em
+`studies/predicao-em-escala.md`.
+
+### Quando faltar LiDAR
+
+`--lidar-dir` é varrido por `<stem>_lidar.tif` (e `<stem>.tif` como fallback).
+Se um tile não tem LiDAR mas o modelo é fusion: **prediz com zeros e marca
+`lidar_status=missing` no `manifest.csv`**. Decisão fica explícita no log,
+não some.
 
 ---
 

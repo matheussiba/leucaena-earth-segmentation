@@ -21,7 +21,7 @@ append new plans by incrementing the prefix.
 | 01 | [Migrate tree_fusion to leucaena binary + GeoJSON masks](01-migrate-tree-fusion-to-leucaena-geojson.md) | built |
 | 02 | [Docker WSL CUDA](02-docker-wsl-cuda.md) | built + deployed |
 | 03 | [Tile-based patches pipeline](03-tile-based-patches-pipeline.md) | built |
-| 04 | [Tile-based pipeline part 2 (predict-tiles, HDF5/Zarr, LiDAR)](04-tile-based-part2-predict-scale-lidar.md) | partial (3C done) |
+| 04 | [Tile-based pipeline part 2 (predict-tiles, HDF5/Zarr, LiDAR)](04-tile-based-part2-predict-scale-lidar.md) | partial (3A + 3C done) |
 
 ## Conventions
 

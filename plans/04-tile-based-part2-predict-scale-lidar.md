@@ -1,6 +1,6 @@
 # 04 — Tile-based pipeline part 2: predict-tiles, HDF5/Zarr, LiDAR
 
-- **Status:** `partial` — 3C done (LAZ → patch); 3A and 3B still pending.
+- **Status:** `partial` — 3A and 3C done; 3B (HDF5/Zarr) still pending.
 - **Owner:** Matheus
 - **Last update:** 2026-05-16
 
@@ -304,9 +304,122 @@ docker compose run --rm segmentation \
   honour tile boundaries: patches from the same tile can fall into
   train and test. A `--split-by tile` flag is still pending (also
   listed as a risk in this plan above).
-- Sections **3A (predict-tiles.py)** and **3B (HDF5/Zarr migration)**
-  remain unimplemented. The decisions section at the top of this
-  plan still applies; nothing in 3C blocks either.
+- Section **3B (HDF5/Zarr migration)** remains unimplemented. The
+  decisions section at the top of this plan still applies; nothing
+  in 3A or 3C blocks 3B.
 - Image size grew by ~500 MB because of PDAL. Acceptable for now;
   a slim image variant without PDAL would be the right move once
   LiDAR rasters are stable on disk and you only need training.
+
+---
+
+## Outcome — 3A built (`predict-tiles.py` scalable inference)
+
+**Implemented directly on `main`** (2026-05-16). Didactic write-up:
+[`studies/predicao-em-escala.md`](../studies/predicao-em-escala.md).
+
+### Problem we had
+
+`prediction.py` (legacy) needs the **whole AOI mosaiced into one scene**
+(`prepared/opt_img.npy` or a single VRT) and loads it into RAM. The
+Piracicaba AOI (~4000×4000) fits; a state- or country-wide run (hundreds
+of GB of optical) does not. We needed a runner that walks a folder of
+tiles, predicts each independently, and lets QGIS read everything as one
+mosaic.
+
+### What was built
+
+1. **`predict-tiles.py`** (new top-level script). Per-tile loop with
+   reflect-padding, multi-overlap softmax averaging, georeferenced
+   GeoTIFF output (class + optional probability), CSV manifest, and
+   final `gdalbuildvrt` to assemble a virtual mosaic. Defaults match
+   the decisions below; every override is exposed as a flag.
+
+2. **`utils/inference.py`** (new module). Thin reusable layer:
+   `read_tile_as_bgrn`, `read_lidar_as_array`, `scale_lidar` (mirrors
+   `PatchFileDataset._scale_lidar` byte-for-byte so the network sees
+   the same distribution it was trained on), `predict_tile_probability`
+   (sliding-window + softmax avg, returns `(H, W, n_classes)`),
+   `write_class_geotiff`, `write_prob_geotiff` (with `scale_factor`
+   packing for uint16/uint8 dtypes).
+
+3. **`conf/paths.py`** — new constant `PATH_PREDICTIONS_DIR`
+   (env `LEUCAENA_PREDICTIONS_DIR`, default `/data/predictions`).
+
+4. **`docker-compose.yml`** — new bind mount
+   `${LEUCAENA_PREDICTIONS_HOST_DIR}:/data/predictions` plus the
+   matching env var so the container sees the host predictions folder.
+
+5. **`.env.example` + `.env`** — added
+   `LEUCAENA_PREDICTIONS_HOST_DIR` (host, e.g. `/mnt/d/leucaena-predictions`)
+   and `LEUCAENA_PREDICTIONS_DIR` (container, `/data/predictions`).
+
+6. **`CHEATSHEET.md`** — new section "Predição em escala (tile-by-tile)"
+   with the command examples, flag table, output layout, and a pointer
+   to the deeper writeup in `studies/`.
+
+7. **`studies/predicao-em-escala.md`** (new) — didactic walkthrough:
+   why the legacy script does not scale, what the per-tile loop does,
+   the four design decisions below, anatomy of the new files, known
+   limitations, and a smoke-test recipe.
+
+8. **`studies/guia-codigo.md`** — added a "Parte 4b — Predição em
+   escala" entry pointing at the new script and the studies note.
+
+9. **`.gitignore`** — removed the `studies/` line. The folder is
+   tracked from now on; new didactic notes go there.
+
+### Decisions (and why)
+
+- **Output on local disk, NOT in OneDrive.** A state-wide run easily
+  hits tens of GB of GeoTIFFs. OneDrive starts choking around
+  ~10 GB. `$LEUCAENA_PREDICTIONS_HOST_DIR` (e.g. `D:\leucaena-predictions`)
+  is mounted at `/data/predictions` and `paths.PATH_PREDICTIONS_DIR`
+  is the canonical container path. The repo never knows where this
+  is on the host; only the env vars do.
+- **Save both class and probability rasters (`--save-prob` default ON).**
+  The argmax is convenience; the probability is what supports ROC
+  analysis, threshold sweeps, and any stacked classifier you build on
+  top. Disk is cheap; analysis-grade outputs are not.
+- **Probability dtype default `uint16` with `scale_factor = 1/65535`.**
+  GeoTIFF / GDAL have **no native Float16**. The closest portable
+  equivalent is `uint16 + scale_factor`: 2 bytes/pixel, 65 536 levels
+  in `[0, 1]`, read transparently as a float by QGIS / rasterio /
+  xarray. This is the same trick CMIP, ESA Sentinel, and most
+  scientific raster products use to halve disk size without
+  introducing format-compat issues. `--prob-dtype float32` keeps the
+  old 4 bytes/pixel behaviour if anyone needs it. `uint8` is an
+  even smaller "visualisation-only" alternative (256 levels).
+- **Overlap default `[0, 0.25, 0.5]`, single-value `--overlap` for
+  previews.** The three-overlap average is the same as
+  `general.PREDICTION_OVERLAPS` and as `prediction.py` — keeps a fair
+  comparison between legacy and new scripts. `--overlap 0` runs a
+  single fast pass (~1/7 of the cost) for sanity-checking on a few
+  tiles before committing to the full run.
+- **Missing LiDAR tile = predict with zeros and log
+  `lidar_status=missing` in the manifest.** The pipeline does **not**
+  silently skip or hard-fail. The model receives a zero-LiDAR tensor
+  (consistent with what `PatchFileDataset` already does for patches
+  without LiDAR) and the per-tile decision is visible in both the
+  stdout log and the per-tile CSV row — so you can later filter
+  the manifest to re-predict only the affected tiles once LiDAR is
+  available.
+
+### Known limitations / next steps
+
+- **One tile in RAM at a time.** For a 4000×4000 RGBN tile (4 bands
+  uint8) that is ~64 MB of input plus the padded probability buffers
+  (a few hundred MB). Acceptable for IBGE / IGC tiles; if you ever
+  switch to multi-km² monolithic tiles, the script will need an
+  internal sub-tiling step. Trivial to add later.
+- **Single GPU, single process.** Multi-GPU parallelism is trivial via
+  `xargs -P` on disjoint `--tiles-glob` subsets; we can wire it inside
+  the script when it becomes a bottleneck.
+- **`evaluation.py` was not updated.** It still consumes the legacy
+  per-pixel `.npy` outputs from `prediction.py`. The new VRT can be
+  evaluated tile-by-tile against the GeoJSON masks via a small
+  rasterio loop; that becomes the next clean-up (sits with 3B in
+  this plan).
+- **`gdalbuildvrt` requires consistent CRS across tiles.** Always true
+  for IBGE / IGC products. If a mix of CRSs ever lands, run `gdalwarp`
+  upstream or generate one VRT per CRS.

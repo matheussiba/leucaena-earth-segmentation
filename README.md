@@ -285,6 +285,10 @@ LiDAR rasterisation (only needed for experiments 2 / 3):
 
 - `prep-lidar-rasters.py` — converts a folder of `.laz` point clouds into 2-band GeoTIFFs (`CHM`, `INTENSITY`) aligned to your RGBN tiles using PDAL + GDAL. Once you point `prep-patches-from-tiles.py --lidar-dir` at the output, the dataset feeds real LiDAR to the network and unlocks early/late fusion. See the **Pipeline LiDAR** section in [CHEATSHEET.md](CHEATSHEET.md) for the LAZ → patch flow.
 
+Scalable inference (state-/country-wide):
+
+- `predict-tiles.py` — replaces `prediction.py` when the AOI no longer fits in RAM. Walks a folder of tiles, writes one georeferenced `*_pred.tif` (uint8 class) and optional `*_prob.tif` (uint16 probability with `scale_factor`) per tile, then builds a `pred.vrt` mosaic so QGIS opens everything as one continuous layer. Output goes to a **local disk** path (controlled by `LEUCAENA_PREDICTIONS_HOST_DIR` in `.env`), not the repo / OneDrive. Design rationale in [`studies/predicao-em-escala.md`](studies/predicao-em-escala.md); quick reference in **[CHEATSHEET.md](CHEATSHEET.md#predição-em-escala-tile-by-tile)**.
+
 ---
 
 ## 6. Step-by-step usage

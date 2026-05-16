@@ -16,8 +16,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 WORKDIR /workspace
 
-# GDAL via conda-forge (matches conda's libstdc++; apt+pip GDAL breaks on this base image)
-RUN conda install -y -c conda-forge gdal proj proj-data libstdcxx-ng \
+# GDAL + PDAL via conda-forge.
+# - GDAL: rasters / vectors / warping (used by every step of the pipeline).
+# - PDAL + python-pdal: needed by prep-lidar-rasters.py to turn LAZ point
+#   clouds into CHM + INTENSITY GeoTIFFs. Adds ~500 MB but keeps the LiDAR
+#   pipeline reproducible in the same image.
+RUN conda install -y -c conda-forge \
+        gdal proj proj-data libstdcxx-ng \
+        pdal python-pdal \
     && conda clean -afy
 
 COPY requirements-docker.txt /tmp/requirements-docker.txt

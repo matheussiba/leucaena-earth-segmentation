@@ -11,6 +11,10 @@ services:
       # WSL: use /mnt/g/... or /mnt/c/... in .env (not C:/...). Quotes needed if the path has spaces.
       - "${LEUCAENA_TILES_HOST_DIR}:/data/rgbir"
       - "${LEUCAENA_MASKS_HOST_DIR}:/data/masks"
+      # LiDAR pipeline (optional; comment out the two lines below if you do not
+      # have LAZ point clouds yet). Host paths come from .env.
+      - "${LEUCAENA_LAZ_HOST_DIR}:/data/laz"
+      - "${LEUCAENA_LIDAR_HOST_DIR}:/data/lidar"
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -19,6 +23,8 @@ services:
       - GTIFF_SRS_SOURCE=EPSG
       - LEUCAENA_TILES_DIR=${LEUCAENA_TILES_DIR}
       - LEUCAENA_MASKS_PATH=${LEUCAENA_MASKS_PATH}
+      - LEUCAENA_LAZ_DIR=${LEUCAENA_LAZ_DIR}
+      - LEUCAENA_LIDAR_DIR=${LEUCAENA_LIDAR_DIR}
     deploy:
       resources:
         reservations:

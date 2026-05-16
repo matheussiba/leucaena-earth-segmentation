@@ -135,8 +135,9 @@ data/
 prepared/
 experiments/
 
-# Local study notes (kept out of the repo on purpose)
-studies/
+# studies/ is tracked now — it holds the didactic notes for the codebase
+# (see studies/guia-codigo.md). Add new markdowns there as the pipeline grows.
+
 *.tif
 *.tiff
 *.geojson

@@ -45,3 +45,8 @@ PATH_PATCHES_MANIFEST = os.path.join(PATH_PATCHES_DIR, 'manifest.csv')
 PATH_LAZ_DIR = _env('LEUCAENA_LAZ_DIR', os.path.join(os.sep, 'data', 'laz'))
 PATH_LIDAR_DIR = _env('LEUCAENA_LIDAR_DIR', os.path.join(os.sep, 'data', 'lidar'))
 PATH_LIDAR_MANIFEST = os.path.join(PATH_LIDAR_DIR, 'lidar_manifest.csv')
+
+# --- Tile-based predictions (predict-tiles.py) ---
+# Output of predict-tiles.py lives on local disk, NOT inside the repo, because a
+# country-wide run produces tens of GB of GeoTIFFs that would blow up OneDrive.
+PATH_PREDICTIONS_DIR = _env('LEUCAENA_PREDICTIONS_DIR', os.path.join(os.sep, 'data', 'predictions'))

@@ -20,6 +20,8 @@ the whole study area in RAM. For each tile it:
    (uint8) and appends a row to ``manifest.csv``.
 6. After all tiles, performs a deterministic train/val/test split at the
    patch level and writes the final ``manifest.csv``.
+7. Exports ``patch_footprints.geojson`` so the patch grid can be inspected
+   directly in QGIS.
 
 Normalisation
 -------------
@@ -38,6 +40,7 @@ Outputs
 - ``<out-dir>/lbl/<patch_id>.npy``    uint8    (H, W)
 - ``<out-dir>/lidar/<patch_id>.npy``  float32  (H, W, k)  *(only when --lidar-dir is set)*
 - ``<out-dir>/manifest.csv``           columns described below
+- ``<out-dir>/patch_footprints.geojson`` one polygon per patch for QGIS inspection
 
 LiDAR mode (optional)
 ---------------------
@@ -55,9 +58,11 @@ from __future__ import annotations
 import argparse
 import csv
 import glob
+import json
 import os
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass, asdict
 from typing import Iterable, Optional
 
@@ -423,6 +428,86 @@ def _write_manifest(records: Iterable[PatchRecord], path: str) -> None:
             writer.writerow(asdict(rec))
 
 
+def _pixel_to_xy(gt, px: int, py: int) -> list[float]:
+    """Convert pixel coordinates into map coordinates using a GDAL geotransform."""
+    x = gt[0] + px * gt[1] + py * gt[2]
+    y = gt[3] + px * gt[4] + py * gt[5]
+    return [float(x), float(y)]
+
+
+def _write_patch_footprints(
+    records: Iterable[PatchRecord],
+    tiles_dir: str,
+    out_path: str,
+) -> tuple[int, str, dict[str, int]]:
+    """Write one GeoJSON square per patch for visual inspection in QGIS."""
+    records = list(records)
+    tile_cache: dict[str, tuple[tuple, str | None]] = {}
+    first_epsg: str | None = None
+    counts: Counter[str] = Counter()
+    features = []
+
+    for rec in records:
+        if rec.tile_name not in tile_cache:
+            tile_path = os.path.join(tiles_dir, f"{rec.tile_name}.tif")
+            ds = gdal.Open(tile_path, gdalconst.GA_ReadOnly)
+            if ds is None:
+                raise FileNotFoundError(tile_path)
+            gt = ds.GetGeoTransform()
+            srs = ds.GetSpatialRef()
+            epsg = None
+            if srs is not None:
+                srs.AutoIdentifyEPSG()
+                epsg = srs.GetAuthorityCode(None) or srs.GetAuthorityCode("PROJCS")
+            ds = None
+            tile_cache[rec.tile_name] = (gt, epsg)
+            if first_epsg is None:
+                first_epsg = epsg
+
+        gt, _epsg = tile_cache[rec.tile_name]
+        p1 = _pixel_to_xy(gt, rec.xoff, rec.yoff)
+        p2 = _pixel_to_xy(gt, rec.xoff + rec.win, rec.yoff)
+        p3 = _pixel_to_xy(gt, rec.xoff + rec.win, rec.yoff + rec.win)
+        p4 = _pixel_to_xy(gt, rec.xoff, rec.yoff + rec.win)
+        counts[rec.split] += 1
+
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[p1, p2, p3, p4, p1]],
+                },
+                "properties": {
+                    "patch_id": rec.patch_id,
+                    "tile_name": rec.tile_name,
+                    "split": rec.split,
+                    "row": rec.row,
+                    "col": rec.col,
+                    "xoff": rec.xoff,
+                    "yoff": rec.yoff,
+                    "win_px": rec.win,
+                    "size_m": round(rec.win * abs(gt[1]), 3),
+                    "leucaena_fraction": rec.leucaena_fraction,
+                    "leucaena_pct": round(rec.leucaena_fraction * 100.0, 3),
+                    "has_lidar": rec.has_lidar,
+                },
+            }
+        )
+
+    crs_name = f"EPSG:{first_epsg}" if first_epsg else "unknown"
+    geojson = {
+        "type": "FeatureCollection",
+        "name": "patch_footprints",
+        "crs": {"type": "name", "properties": {"name": crs_name}},
+        "features": features,
+    }
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(geojson, f, ensure_ascii=False)
+    return len(features), crs_name, dict(counts)
+
+
 def main() -> None:
     args = _parse_args()
     out_dir = str(args.out_dir)
@@ -500,6 +585,19 @@ def main() -> None:
         manifest_path = os.path.join(out_dir, "manifest.csv")
         _write_manifest(all_records, manifest_path)
         log(f"\nmanifest -> {manifest_path}")
+
+        footprints_path = os.path.join(out_dir, "patch_footprints.geojson")
+        try:
+            n_features, crs_name, split_counts = _write_patch_footprints(
+                all_records,
+                tiles_dir=args.tiles_dir,
+                out_path=footprints_path,
+            )
+            log(f"footprints -> {footprints_path}")
+            log(f"footprints features={n_features:,} crs={crs_name} splits={split_counts}")
+        except Exception as exc:  # noqa: BLE001 - patches/manifest are still valid
+            log(f"[WARN] could not write patch footprints GeoJSON: {type(exc).__name__}: {exc}")
+
         log(f"elapsed : {(time.time() - t0):.1f} s")
 
 

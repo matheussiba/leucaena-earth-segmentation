@@ -42,16 +42,29 @@ Outputs
 - ``<out-dir>/manifest.csv``           columns described below
 - ``<out-dir>/patch_footprints.geojson`` one polygon per patch for QGIS inspection
 
-LiDAR mode (optional)
----------------------
+LiDAR mode (optional, also enables refined labelling)
+-----------------------------------------------------
 When ``--lidar-dir`` is set, the script also extracts the same windows from
 the matching LiDAR raster (produced by ``prep-lidar-rasters.py``). The match
 is by stem: ``<tile_name>.tif`` in ``--tiles-dir`` pairs with
-``<tile_name>.tif`` in ``--lidar-dir``. Patches with no matching LiDAR tile
-are still written for the optical and label branches, with
-``has_lidar=False`` in the manifest. ``PatchFileDataset`` falls back to a
-zero LiDAR tensor for those rows, so the dataset stays usable for
-experiment 1 (optical-only) regardless.
+``<tile_name>.tif`` in ``--lidar-dir``.
+
+Setting ``--lidar-dir`` ALSO activates the **refined labelling rule**
+(professor's suggestion to reduce class confusion). Each pixel becomes:
+
+- ``IGNORE_INDEX (255)`` when **outside every polygon** (loss + metrics skip it);
+- ``1`` when **inside a polygon** AND ``CHM >= LEUCAENA_CHM_MIN_M`` AND
+  ``NDVI >= LEUCAENA_NDVI_MIN`` (confirmed leucaena);
+- ``0`` when **inside a polygon** but the CHM/NDVI checks fail (clearing /
+  bare ground / tower / antenna — actively taught as NOT-leucaena).
+
+Tiles without a matching LiDAR raster are **skipped entirely** when
+``--lidar-dir`` is set (we never train on un-refinable polygons in this
+mode). Without ``--lidar-dir`` the script keeps the legacy behaviour
+(polygon interior = 1, everything else = 0) for backwards compatibility.
+
+NDVI is computed directly from the RGBN tile:
+``NDVI = (NIR - RED) / (NIR + RED)``.
 """
 from __future__ import annotations
 
@@ -81,6 +94,12 @@ class PatchRecord:
     LiDAR-specific fields (``lidar_tile_name``, ``has_lidar``) stay at their
     defaults when ``--lidar-dir`` is not used, which keeps backwards
     compatibility with manifests produced before LiDAR support.
+
+    Refined-label fields:
+    - ``polygon_fraction``: share of pixels with ``label != IGNORE_INDEX``
+      (i.e. inside any annotated polygon). 1.0 in the legacy path.
+    - ``leucaena_fraction``: share of pixels with ``label == 1`` (confirmed
+      leucaena after CHM + NDVI refinement when applicable).
     """
 
     patch_id: str
@@ -91,6 +110,7 @@ class PatchRecord:
     yoff: int
     win: int
     leucaena_fraction: float
+    polygon_fraction: float = 1.0
     split: str = ""
     lidar_tile_name: str = ""
     has_lidar: bool = False
@@ -260,6 +280,75 @@ def _find_lidar_tile(tile_name: str, lidar_dir: Optional[str]) -> Optional[str]:
     return None
 
 
+def _compute_ndvi_from_tile(ds: gdal.Dataset, band_order: str) -> np.ndarray:
+    """Read RED and NIR from the full tile and return NDVI as float32 H x W.
+
+    NDVI = (NIR - RED) / (NIR + RED), with the denominator clipped at a tiny
+    epsilon so we never divide by zero. Non-finite results (e.g. when both
+    bands are 0) become 0.0 so they fail the ``NDVI >= threshold`` check
+    naturally.
+    """
+    if band_order == "RGBN":
+        red_idx, nir_idx = 1, 4  # GDAL bands are 1-indexed: R=1, G=2, B=3, N=4
+    elif band_order == "BGRN":
+        red_idx, nir_idx = 3, 4
+    else:
+        raise ValueError(f"Unsupported band order: {band_order}")
+
+    red = ds.GetRasterBand(red_idx).ReadAsArray().astype(np.float32)
+    nir = ds.GetRasterBand(nir_idx).ReadAsArray().astype(np.float32)
+    denom = nir + red
+    denom = np.where(denom == 0.0, 1e-6, denom)
+    ndvi = (nir - red) / denom
+    ndvi[~np.isfinite(ndvi)] = 0.0
+    return ndvi
+
+
+def _read_full_lidar_band(ds: gdal.Dataset, band_idx_1based: int) -> np.ndarray:
+    """Read one full LiDAR band as float32 H x W, replacing no-data with 0.0.
+
+    Used by the label refinement step to fetch the CHM (band 1) for the whole
+    tile at once. We never trust the in-LAZ CHM beyond ``LIDAR_CHM_MAX_M``
+    because of treetop spikes or building artefacts (clipped at read time).
+    """
+    band = ds.GetRasterBand(band_idx_1based)
+    arr = band.ReadAsArray()
+    if arr is None:
+        raise IOError(f"GDAL ReadAsArray returned None for LiDAR band {band_idx_1based}")
+    arr = arr.astype(np.float32, copy=False)
+    nodata = band.GetNoDataValue()
+    if nodata is not None:
+        arr[np.isclose(arr, float(nodata))] = 0.0
+    arr[~np.isfinite(arr)] = 0.0
+    return arr
+
+
+def _refine_label_with_chm_ndvi(
+    polygon_mask: np.ndarray,
+    chm: np.ndarray,
+    ndvi: np.ndarray,
+    chm_min_m: float,
+    ndvi_min: float,
+    ignore_value: int,
+) -> np.ndarray:
+    """Build the refined per-pixel label from polygon + CHM + NDVI.
+
+    Pixels outside every polygon become ``ignore_value`` (skipped by the loss
+    and metrics). Pixels inside a polygon become ``1`` only when both
+    ``CHM >= chm_min_m`` AND ``NDVI >= ndvi_min`` hold; otherwise they
+    become ``0`` (background — actively taught as NOT-leucaena).
+
+    Returns a ``uint8`` array with values in ``{0, 1, ignore_value}``.
+    """
+    in_poly = polygon_mask == 1
+    is_tall = chm >= float(chm_min_m)
+    is_veg = ndvi >= float(ndvi_min)
+    refined = np.full(polygon_mask.shape, ignore_value, dtype=np.uint8)
+    refined[in_poly] = 0
+    refined[in_poly & is_tall & is_veg] = 1
+    return refined
+
+
 def _process_tile(
     tile_path: str,
     geojson_path: str,
@@ -286,37 +375,75 @@ def _process_tile(
         ds = None
         return []
 
-    label, n_features = rasterize_geojson_for_tile(geojson_path, tile_path)
+    polygon_mask, n_features = rasterize_geojson_for_tile(geojson_path, tile_path)
     log(f"  shape={width}x{height} | features used={n_features}")
     if n_features == 0:
         ds = None
         return []
 
     # --- LiDAR raster lookup (optional) ---------------------------------
+    # When --lidar-dir is set, refined labelling (CHM + NDVI inside polygons,
+    # IGNORE outside) is activated. Tiles WITHOUT a usable LiDAR raster are
+    # skipped in this mode so the training set only contains refinable pixels.
     lidar_path = _find_lidar_tile(tile_name, lidar_dir)
     lidar_ds: Optional[gdal.Dataset] = None
     if lidar_dir:
         if lidar_path is None:
-            log(f"  [WARN] no LiDAR tile for {tile_name}; falling back to zeros at train time.")
-        else:
-            lidar_ds = gdal.Open(lidar_path, gdalconst.GA_ReadOnly)
-            if lidar_ds is None:
-                log(f"  [WARN] cannot open LiDAR tile: {lidar_path}; falling back to zeros.")
-            elif (lidar_ds.RasterXSize, lidar_ds.RasterYSize) != (width, height):
-                log(
-                    f"  [WARN] LiDAR shape {lidar_ds.RasterXSize}x{lidar_ds.RasterYSize} "
-                    f"differs from RGBN {width}x{height}; falling back to zeros. "
-                    "Re-run prep-lidar-rasters.py with --tiles-dir set."
-                )
-                lidar_ds = None
-            else:
-                log(f"  lidar    : {os.path.basename(lidar_path)} ({lidar_ds.RasterCount} bands)")
+            log(f"  [SKIP] no LiDAR tile for {tile_name} (lidar_dir set: refined-label mode requires CHM).")
+            ds = None
+            return []
+        lidar_ds = gdal.Open(lidar_path, gdalconst.GA_ReadOnly)
+        if lidar_ds is None:
+            log(f"  [SKIP] cannot open LiDAR tile: {lidar_path}.")
+            ds = None
+            return []
+        if (lidar_ds.RasterXSize, lidar_ds.RasterYSize) != (width, height):
+            log(
+                f"  [SKIP] LiDAR shape {lidar_ds.RasterXSize}x{lidar_ds.RasterYSize} "
+                f"differs from RGBN {width}x{height}. "
+                "Re-run prep-lidar-rasters.py with --tiles-dir set."
+            )
+            lidar_ds = None
+            ds = None
+            return []
+        log(f"  lidar    : {os.path.basename(lidar_path)} ({lidar_ds.RasterCount} bands)")
+
+    # --- Label refinement (only when LiDAR is available) -----------------
+    # Build the final ``label`` raster. Without LiDAR we keep the legacy
+    # behaviour (polygon interior = 1, everything else = 0). With LiDAR we
+    # apply the professor's rule: outside polygons -> IGNORE; inside ->
+    # CHM>=threshold AND NDVI>=threshold => 1, else 0.
+    if lidar_ds is not None:
+        ndvi = _compute_ndvi_from_tile(ds, band_order)
+        chm = _read_full_lidar_band(lidar_ds, band_idx_1based=1)  # band 1 is CHM
+        label = _refine_label_with_chm_ndvi(
+            polygon_mask=polygon_mask,
+            chm=chm,
+            ndvi=ndvi,
+            chm_min_m=general.LEUCAENA_CHM_MIN_M,
+            ndvi_min=general.LEUCAENA_NDVI_MIN,
+            ignore_value=general.IGNORE_INDEX,
+        )
+        n_poly = int((polygon_mask == 1).sum())
+        n_leu = int((label == 1).sum())
+        n_ign = int((label == general.IGNORE_INDEX).sum())
+        log(
+            f"  refine   : in_poly={n_poly:,} px | leucaena(1)={n_leu:,} px | "
+            f"bg-in-poly(0)={n_poly - n_leu:,} px | ignore(255)={n_ign:,} px "
+            f"| CHM>={general.LEUCAENA_CHM_MIN_M}m NDVI>={general.LEUCAENA_NDVI_MIN}"
+        )
+    else:
+        label = polygon_mask
 
     step = max(1, int((1 - overlap) * patch_size))
     label_windows = view_as_windows(label, (patch_size, patch_size), step)
     grid_rows, grid_cols = label_windows.shape[:2]
     flat = label_windows.reshape(-1, patch_size, patch_size)
     fraction = np.mean(flat == 1, axis=(1, 2))
+    # Share of pixels that are NOT IGNORE (i.e. inside an annotated polygon).
+    # In the legacy path (no LiDAR) the label has no IGNORE and this is 1.0
+    # for every window, which keeps the manifest backwards-compatible.
+    poly_fraction = np.mean(flat != general.IGNORE_INDEX, axis=(1, 2))
     keep_mask = fraction >= min_target_class
     n_total = flat.shape[0]
     n_keep = int(keep_mask.sum())
@@ -378,6 +505,7 @@ def _process_tile(
                 yoff=yoff,
                 win=patch_size,
                 leucaena_fraction=float(fraction[grid_idx_flat[r, c]]),
+                polygon_fraction=float(poly_fraction[grid_idx_flat[r, c]]),
                 lidar_tile_name=os.path.basename(lidar_path) if has_lidar and lidar_path else "",
                 has_lidar=has_lidar,
             )
@@ -490,6 +618,8 @@ def _write_patch_footprints(
                     "size_m": round(rec.win * abs(gt[1]), 3),
                     "leucaena_fraction": rec.leucaena_fraction,
                     "leucaena_pct": round(rec.leucaena_fraction * 100.0, 3),
+                    "polygon_fraction": rec.polygon_fraction,
+                    "polygon_pct": round(rec.polygon_fraction * 100.0, 3),
                     "has_lidar": rec.has_lidar,
                 },
             }
@@ -532,6 +662,13 @@ def main() -> None:
         log(f"splits            : test={args.test_split}  val={args.val_split}")
         log(f"seed              : {args.seed}")
         log(f"lidar_dir         : {args.lidar_dir or '(disabled)'}")
+        if args.lidar_dir:
+            log(
+                f"label_refinement  : in_poly + CHM>={general.LEUCAENA_CHM_MIN_M}m + "
+                f"NDVI>={general.LEUCAENA_NDVI_MIN} (outside polygons = IGNORE {general.IGNORE_INDEX})"
+            )
+        else:
+            log("label_refinement  : (disabled — polygon interior = 1, outside = 0)")
 
         if not os.path.isdir(args.tiles_dir):
             log(f"[ABORT] tiles dir not found: {args.tiles_dir}")

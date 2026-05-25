@@ -289,6 +289,10 @@ Scalable inference (state-/country-wide):
 
 - `predict-tiles.py` — replaces `prediction.py` when the AOI no longer fits in RAM. Walks a folder of tiles, writes one georeferenced `*_pred.tif` (uint8 class) and optional `*_prob.tif` (uint16 probability with `scale_factor`) per tile, then builds a `pred.vrt` mosaic so QGIS opens everything as one continuous layer. Output goes to a **local disk** path (controlled by `LEUCAENA_PREDICTIONS_HOST_DIR` in `.env`), not the repo / OneDrive. Design rationale in [`studies/predicao-em-escala.md`](studies/predicao-em-escala.md); quick reference in **[CHEATSHEET.md](CHEATSHEET.md#predição-em-escala-tile-by-tile)**.
 
+Refined labelling (reduce class confusion):
+
+- `prep-patches-from-tiles.py --lidar-dir ...` — turns on the **refined label rule** suggested by the professor to cut false positives. Outside annotated polygons → `IGNORE (255)`; inside the polygons → `1` only when `CHM ≥ 4.5 m` (LiDAR) AND `NDVI ≥ 0.3` (computed from RGBN), otherwise `0`. Tiles without matching LiDAR are skipped. Companion changes: 60% patch overlap and continuous random rotation 0–360° + ±10% translation in the dataloader. Full design + rationale in [`studies/labeling-refinado.md`](studies/labeling-refinado.md).
+
 ---
 
 ## 6. Step-by-step usage

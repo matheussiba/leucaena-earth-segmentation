@@ -45,9 +45,11 @@ Moved from ``leucaena-earth-utils/python/scripts/`` into this repository in
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import shutil
+import sys
 import time
 from typing import Any
 
@@ -159,6 +161,7 @@ def copy_rgb_or_ir_with_suffix_cascade(
     dest_dir: str,
     jobs: list[dict[str, Any]],
     label: str,
+    overwrite: bool = OVERWRITE_EXISTING_FILES,
 ) -> dict[str, Any]:
     print("\n" + "=" * 60)
     print(f"{label}: {source_dir} -> {dest_dir}")
@@ -193,7 +196,7 @@ def copy_rgb_or_ir_with_suffix_cascade(
 
         if matched_names:
             for fname in matched_names:
-                if (fname not in dest_names) or OVERWRITE_EXISTING_FILES:
+                if (fname not in dest_names) or overwrite:
                     print(
                         f"  [COPY] {fname} | search_token={matched_token!r} | "
                         f"{id_column}={tile_id!r} | layer={layer_key}"
@@ -218,6 +221,7 @@ def copy_laz_direct_match(
     source_dir: str,
     dest_dir: str,
     jobs: list[dict[str, Any]],
+    overwrite: bool = OVERWRITE_EXISTING_FILES,
 ) -> dict[str, Any]:
     print("\n" + "=" * 60)
     print(f"LAZ: {source_dir} -> {dest_dir}")
@@ -235,7 +239,7 @@ def copy_laz_direct_match(
         hits = _find_files_by_token(source_names, term)
         if hits:
             for fname in hits:
-                if (fname not in dest_names) or OVERWRITE_EXISTING_FILES:
+                if (fname not in dest_names) or overwrite:
                     print(f"  [COPY] {fname} | search_term={term!r}")
                     try:
                         shutil.copy2(
@@ -251,6 +255,133 @@ def copy_laz_direct_match(
             missing_by_layer.setdefault(layer_key, []).append(str(term))
 
     return {"expected": len(jobs), "copied": copied, "missing_by_layer": missing_by_layer}
+
+
+# =============================================================================
+# GeoPackage helper (used by the pipeline orchestrator)
+# =============================================================================
+
+#: Columns tried in order when --id-column is not specified.
+_AUTO_ID_COLUMNS = ("NOMENC_10K", "NOMENC_5K", "NOMENC_2K")
+
+
+def load_tile_ids_from_gpkg(
+    gpkg_path: str,
+    layer: str,
+    id_column: str | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Read tile IDs from a GeoPackage layer and return copy-job lists.
+
+    Returns
+    -------
+    jobs_rgb_ir, jobs_laz
+        Both lists use the same format expected by
+        ``copy_rgb_or_ir_with_suffix_cascade`` and ``copy_laz_direct_match``.
+    """
+    gdf = gpd.read_file(gpkg_path, layer=layer)
+
+    if id_column is None:
+        for candidate in _AUTO_ID_COLUMNS:
+            if candidate in gdf.columns:
+                id_column = candidate
+                break
+        else:
+            # Fall back to the first non-geometry object column
+            for col in gdf.columns:
+                if gdf[col].dtype == object and col.lower() != "geometry":
+                    id_column = col
+                    break
+    if id_column is None:
+        raise ValueError(
+            f"Cannot detect tile-ID column in layer {layer!r}. "
+            f"Available columns: {list(gdf.columns)}"
+        )
+
+    print(f"  [AOI] layer={layer!r}  id_column={id_column!r}  rows={len(gdf)}")
+    tile_ids = (
+        gdf[id_column]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .replace("", None)
+        .dropna()
+        .unique()
+        .tolist()
+    )
+    print(f"  [AOI] unique tile IDs: {len(tile_ids)}")
+
+    jobs_rgb_ir = [
+        {"tile_id": tid, "layer_key": layer, "id_column": id_column}
+        for tid in tile_ids
+    ]
+    jobs_laz = [
+        {"search_term": tid, "layer_key": layer, "id_column": id_column}
+        for tid in tile_ids
+    ]
+    return jobs_rgb_ir, jobs_laz
+
+
+# =============================================================================
+# Argparse (CLI mode — called by run_pipeline.py or directly)
+# =============================================================================
+
+def _parse_args() -> argparse.Namespace | None:
+    """Return parsed args when the script is invoked with CLI flags, else None."""
+    # When the script is run with no arguments it falls back to the legacy
+    # USER CONFIGURATION block above, so existing users are unaffected.
+    if len(sys.argv) == 1:
+        return None
+
+    p = argparse.ArgumentParser(
+        description=(
+            "Step 1 — Copy RGB, IR, and LAZ tiles that intersect an AOI "
+            "defined in a GeoPackage layer."
+        )
+    )
+    p.add_argument(
+        "--aoi",
+        required=True,
+        help="Path to the GeoPackage (.gpkg) that contains the AOI layer.",
+    )
+    p.add_argument(
+        "--layer",
+        required=True,
+        help="Layer name inside the GeoPackage, e.g. articulacao_laser_voo22_AOI_treino",
+    )
+    p.add_argument(
+        "--id-column",
+        default=None,
+        help=(
+            "Tile-ID column inside the layer "
+            f"(auto-detected from {_AUTO_ID_COLUMNS} if not given)."
+        ),
+    )
+    p.add_argument("--source-laz", default=SOURCE_LAZ, help="Source LAZ folder")
+    p.add_argument("--source-rgb", default=SOURCE_RGB, help="Source RGB folder")
+    p.add_argument("--source-ir",  default=SOURCE_IR,  help="Source IR folder")
+    p.add_argument("--dest-laz",   default=DEST_LAZ,   help="Destination LAZ folder")
+    p.add_argument("--dest-rgb",   default=DEST_RGB,   help="Destination RGB folder")
+    p.add_argument("--dest-ir",    default=DEST_IR,    help="Destination IR folder")
+    p.add_argument(
+        "--no-laz", action="store_true", help="Skip copying LAZ files"
+    )
+    p.add_argument(
+        "--no-rgb", action="store_true", help="Skip copying RGB files"
+    )
+    p.add_argument(
+        "--no-ir", action="store_true", help="Skip copying IR files"
+    )
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Re-copy files that already exist at the destination",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Log what would be copied without touching the filesystem",
+    )
+    return p.parse_args()
 
 
 def print_run_summary(label: str, result: dict[str, Any]) -> None:
@@ -272,6 +403,81 @@ def print_run_summary(label: str, result: dict[str, Any]) -> None:
 
 
 def main() -> None:
+    args = _parse_args()
+
+    # ------------------------------------------------------------------
+    # CLI / GPKG mode  (run_pipeline.py or direct invocation with flags)
+    # ------------------------------------------------------------------
+    if args is not None:
+        print("Reading AOI from GeoPackage …")
+        jobs_rgb_ir, jobs_laz = load_tile_ids_from_gpkg(
+            args.aoi, args.layer, args.id_column
+        )
+        if not jobs_rgb_ir:
+            print("\n[ABORT] No tile IDs found in the GeoPackage layer.")
+            return
+
+        src_laz  = args.source_laz
+        src_rgb  = args.source_rgb
+        src_ir   = args.source_ir
+        dest_laz = args.dest_laz
+        dest_rgb = args.dest_rgb
+        dest_ir  = args.dest_ir
+        do_laz   = not args.no_laz
+        do_rgb   = not args.no_rgb
+        do_ir    = not args.no_ir
+        overwrite = args.overwrite
+        dry_run   = args.dry_run
+
+        if dry_run:
+            print(
+                f"[DRY-RUN] Would copy up to {len(jobs_laz)} LAZ, "
+                f"{len(jobs_rgb_ir)} RGB, {len(jobs_rgb_ir)} IR tiles."
+            )
+            print(f"  LAZ  {src_laz}  →  {dest_laz}")
+            print(f"  RGB  {src_rgb}  →  {dest_rgb}")
+            print(f"  IR   {src_ir}  →  {dest_ir}")
+            return
+
+        for d in (dest_laz, dest_rgb, dest_ir):
+            os.makedirs(d, exist_ok=True)
+
+        t0 = time.time()
+        if do_laz:
+            t = time.time()
+            print_run_summary(
+                "LAZ",
+                copy_laz_direct_match(src_laz, dest_laz, jobs_laz, overwrite=overwrite),
+            )
+            print(f"Elapsed (LAZ): {time.time() - t:.2f} s\n")
+        if do_rgb:
+            t = time.time()
+            print_run_summary(
+                "RGB",
+                copy_rgb_or_ir_with_suffix_cascade(
+                    src_rgb, dest_rgb, jobs_rgb_ir, "RGB", overwrite=overwrite
+                ),
+            )
+            print(f"Elapsed (RGB): {time.time() - t:.2f} s\n")
+        if do_ir:
+            t = time.time()
+            print_run_summary(
+                "IR",
+                copy_rgb_or_ir_with_suffix_cascade(
+                    src_ir, dest_ir, jobs_rgb_ir, "IR", overwrite=overwrite
+                ),
+            )
+            print(f"Elapsed (IR): {time.time() - t:.2f} s\n")
+
+        print(f"Total elapsed: {time.time() - t0:.2f} s")
+        print("\n" + "=" * 60)
+        print("Finished.")
+        print("=" * 60)
+        return
+
+    # ------------------------------------------------------------------
+    # Legacy shapefile mode  (no CLI args — reads USER CONFIGURATION block)
+    # ------------------------------------------------------------------
     _ensure_dest_dirs()
 
     loaded = _load_selected_shapefiles()

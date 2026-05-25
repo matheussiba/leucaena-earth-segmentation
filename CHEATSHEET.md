@@ -1,7 +1,39 @@
 # Cheat sheet — leucaena-earth-segmentation
 
-Guia rápido para **você** e para **um colega** rodar o projeto.  
-Dois caminhos:
+Guia rápido para **você** e para **um colega** rodar o projeto.
+
+---
+
+## Pipeline Orquestrado (comando único — Windows PowerShell)
+
+Executa as 5 etapas automaticamente: cópia → fusão RGBNIR → CHM → patches → treino.
+
+```powershell
+python run_pipeline.py `
+  --aoi "G:\My Drive\PHD\02-Tese\02-data\adote-uma-leucena\v1-LEUCENA MAPPING\gdb-leucena_v2.gpkg" `
+  --layer articulacao_laser_voo22_AOI_treino `
+  --source D:\ `
+  --dest "C:\00_DATASETS_AI\260515-piracicaba-aoi" `
+  --build-ovr `
+  --train
+```
+
+**Dry-run (nenhum arquivo é alterado):**
+```powershell
+python run_pipeline.py --aoi ... --layer ... --source D:\ --dest ... --dry-run --verbose
+```
+
+**Rodar etapas específicas:**
+```powershell
+python run_pipeline.py ... --steps 1,2          # só cópia + fusão
+python run_pipeline.py ... --steps 3,4 --train  # CHM + patches + treino
+```
+
+> Documentação completa: [`studies/orquestrador-pipeline.md`](studies/orquestrador-pipeline.md)
+
+---
+
+Dois caminhos para ambiente de execução:
 
 | Caminho | Quando usar |
 |---------|-------------|

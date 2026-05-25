@@ -33,14 +33,99 @@ from conf import paths, general
 import random
 
 # hflip / vflip: horizontal and vertical flip augmentations from torchvision.
-# Applied to image AND label identically so spatial alignment is preserved.
-from torchvision.transforms.functional import hflip, vflip
+# affine: arbitrary-angle rotation + translation in one call (post-rotation
+# translation, integer pixel offsets). InterpolationMode picks the resampler:
+# BILINEAR for continuous data (opt, lidar), NEAREST for the label so class
+# indices stay valid (no fractional class ids).
+# All three transforms are applied to image AND label identically so spatial
+# alignment is preserved.
+from torchvision.transforms.functional import hflip, vflip, affine, InterpolationMode
 
 # view_as_windows: creates a sliding-window view of an array without copying data.
 # Used here to extract patch index grids over the full scene.
 # view_as_blocks: similar but uses non-overlapping blocks — an alternative to
 # sliding windows, useful if you want perfectly tiled (non-overlapping) patches.
 from skimage.util import view_as_windows, view_as_blocks
+
+def _augment_opt_lidar_label(
+    opt_tensor: torch.Tensor,
+    lidar_tensor: torch.Tensor,
+    label_tensor: torch.Tensor,
+    *,
+    rotation_deg: float,
+    translate_frac: float,
+    ignore_index: int,
+):
+    """Apply matching random rotation + translation + flips to all three tensors.
+
+    - ``rotation_deg``: max rotation magnitude in degrees. Angle is sampled
+      uniformly in ``[0, rotation_deg)``. Set to 0 to disable rotation.
+    - ``translate_frac``: max translation magnitude as a fraction of the
+      patch side. Translation is sampled independently for x and y in
+      ``[-translate_frac, +translate_frac]``. Set to 0 to disable.
+    - ``ignore_index``: value used to fill the label outside the original
+      frame (so the loss skips those fabricated pixels).
+
+    Optical / LiDAR get bilinear interpolation with fill=0; the label gets
+    nearest-neighbour with fill=ignore_index. Horizontal/vertical flips are
+    applied independently with 50% probability each (free augmentation,
+    no resampling artefacts).
+    """
+    H = opt_tensor.shape[-2]
+    W = opt_tensor.shape[-1]
+
+    angle = float(random.uniform(0.0, float(rotation_deg))) if rotation_deg > 0 else 0.0
+    if translate_frac > 0:
+        tx = int(round(random.uniform(-translate_frac, translate_frac) * W))
+        ty = int(round(random.uniform(-translate_frac, translate_frac) * H))
+    else:
+        tx, ty = 0, 0
+
+    needs_affine = (angle != 0.0) or (tx != 0) or (ty != 0)
+    if needs_affine:
+        # Label needs a leading channel dim for torchvision.affine, then squeezed.
+        label_in = label_tensor.unsqueeze(0)
+        opt_tensor = affine(
+            opt_tensor,
+            angle=angle,
+            translate=[tx, ty],
+            scale=1.0,
+            shear=[0.0, 0.0],
+            interpolation=InterpolationMode.BILINEAR,
+            fill=0.0,
+        )
+        lidar_tensor = affine(
+            lidar_tensor,
+            angle=angle,
+            translate=[tx, ty],
+            scale=1.0,
+            shear=[0.0, 0.0],
+            interpolation=InterpolationMode.BILINEAR,
+            fill=0.0,
+        )
+        label_out = affine(
+            label_in,
+            angle=angle,
+            translate=[tx, ty],
+            scale=1.0,
+            shear=[0.0, 0.0],
+            interpolation=InterpolationMode.NEAREST,
+            fill=int(ignore_index),
+        )
+        label_tensor = label_out.squeeze(0)
+
+    if bool(random.getrandbits(1)):
+        opt_tensor = hflip(opt_tensor)
+        lidar_tensor = hflip(lidar_tensor)
+        label_tensor = hflip(label_tensor)
+
+    if bool(random.getrandbits(1)):
+        opt_tensor = vflip(opt_tensor)
+        lidar_tensor = vflip(lidar_tensor)
+        label_tensor = vflip(label_tensor)
+
+    return opt_tensor, lidar_tensor, label_tensor
+
 
 class TreeTrainDataSet(Dataset):
     """Loads prepared full scenes once, then indexes patches by precomputed window indices."""
@@ -269,18 +354,14 @@ class PatchFileDataset(Dataset):
         label_tensor = torch.tensor(lbl_uint8.astype(np.int64)).to(self.device)
 
         if self.data_aug:
-            k = random.randint(0, 3)
-            opt_tensor = torch.rot90(opt_tensor, k, (1, 2))
-            lidar_tensor = torch.rot90(lidar_tensor, k, (1, 2))
-            label_tensor = torch.rot90(label_tensor, k, (0, 1))
-            if bool(random.getrandbits(1)):
-                opt_tensor = hflip(opt_tensor)
-                lidar_tensor = hflip(lidar_tensor)
-                label_tensor = hflip(label_tensor)
-            if bool(random.getrandbits(1)):
-                opt_tensor = vflip(opt_tensor)
-                lidar_tensor = vflip(lidar_tensor)
-                label_tensor = vflip(label_tensor)
+            opt_tensor, lidar_tensor, label_tensor = _augment_opt_lidar_label(
+                opt_tensor,
+                lidar_tensor,
+                label_tensor,
+                rotation_deg=float(general.AUG_ROTATION_DEG),
+                translate_frac=float(general.AUG_TRANSLATE_FRAC),
+                ignore_index=int(general.IGNORE_INDEX),
+            )
 
         return ((opt_tensor, lidar_tensor), label_tensor)
 

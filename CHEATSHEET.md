@@ -382,7 +382,7 @@ Sem `--patch-source file`, treina pelo caminho antigo (`prep-data.py`). Prediç�
 | `--masks` | `data/masks.geojson` | GeoJSON com polígonos |
 | `--out-dir` | `prepared/patches` | Onde salvar |
 | `--patch-size` | `256` | Lado do patch |
-| `--overlap` | `0.5` | Sobreposição do sliding window |
+| `--overlap` | `0.6` | Sobreposição do sliding window (60%) |
 | `--min-target-class` | `0.01` | Fração mínima de pixels leucaena por patch |
 | `--test-split` | `0.2` | Fração para teste |
 | `--val-split` | `0.2` | Fração de validação dentro do treino |
@@ -462,7 +462,14 @@ Resultado em `/data/lidar/` (mapeado para `C:\00_DATASETS_AI\.../lidar` no host)
   `skip-existing` / `error`), `n_points`, dimensões, tempo, mensagem de erro.
 - `preparation.txt` — log completo do batch.
 
-### 2. Gerar patches com LiDAR
+### 2. Gerar patches com LiDAR (ativa o label refinado)
+
+> Passar `--lidar-dir` ativa automaticamente o **label refinado** (regra
+> nova do professor): pixels fora do polígono viram `IGNORE (255)`;
+> dentro do polígono, `1` apenas se `CHM ≥ 4.5 m` E `NDVI ≥ 0.3`, senão
+> `0`. Detalhes em
+> [`studies/labeling-refinado.md`](studies/labeling-refinado.md).
+> Tiles **sem** LiDAR correspondente são **pulados** nesse modo.
 
 ```bash
 python prep-patches-from-tiles.py \

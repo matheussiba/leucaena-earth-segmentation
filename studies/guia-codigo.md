@@ -57,8 +57,14 @@ herdado do projeto original *tree_fusion*. Funciona com **uma cena única**
    - Abre com GDAL → pega bbox e CRS do raster.
    - Chama `rasterize_geojson_for_tile()` (em `utils/ops.py`) — **filtra polígonos**
      que intersectam o bbox (OGR `SetSpatialFilter`) e rasteriza só esses na
-     grade do tile. Pixels dentro de polígono = `1`, fora = `0`.
-   - Desliza janelas `256×256` com `overlap=0.5` sobre o label, e mantém só as
+     grade do tile.
+   - **Label refinado** (quando `--lidar-dir` é passado): pixels FORA do polígono
+     viram `255 (IGNORE)`; pixels DENTRO do polígono viram `1` apenas se
+     `CHM ≥ 4.5 m` E `NDVI ≥ 0.3`; senão viram `0`. Detalhes em
+     [`studies/labeling-refinado.md`](labeling-refinado.md).
+   - **Modo legado** (sem `--lidar-dir`): pixels dentro de polígono = `1`,
+     fora = `0`.
+   - Desliza janelas `256×256` com `overlap=0.6` sobre o label, e mantém só as
      janelas com **≥ `--min-target-class`** (1%) de pixels de leucaena.
    - Lê **apenas** essas janelas do GeoTIFF (não a tile inteira) e salva como
      `.npy` em `prepared/patches/opt/<id>.npy` (uint8 BGRN) e `lbl/<id>.npy`.
@@ -159,7 +165,10 @@ preparation.txt      log do run
 4. **`utils/dataloader.py`** → `PatchFileDataset`:
    - `__init__` lê `manifest.csv` e filtra pelo `split`.
    - `__getitem__` carrega `.npy` (ou cache RAM), normaliza `/255`, aplica
-     data augmentation (rotações 90° + flips).
+     data augmentation (rotação contínua 0–360° + translação ±10% + hflip/vflip).
+     O label rotacionado/transladado usa fill `IGNORE_INDEX (255)`, então
+     os cantos fabricados não contam no loss. Constantes em
+     `conf/general.py:AUG_ROTATION_DEG` e `AUG_TRANSLATE_FRAC`.
 5. **`utils/trainer.py`**:
    - `train_loop` / `val_loop`: barra de progresso `tqdm`, soma loss e F1
      por batch, devolve médias.
@@ -436,6 +445,8 @@ Veja `plans/04-tile-based-part2-predict-scale-lidar.md`:
   detalhes em `studies/predicao-em-escala.md`)
 - ~~LiDAR no pipeline tile-based~~ → **feito** (`prep-lidar-rasters.py`,
   `prep-patches-from-tiles.py --lidar-dir`)
+- ~~label refinado (CHM + NDVI + IGNORE fora do polígono)~~ → **feito**
+  (detalhes em `studies/labeling-refinado.md`)
 - empacotar patches em HDF5/Zarr para datasets muito grandes (próximo)
 - splits por tile (e não por patch) para evitar vazamento entre train/test
 - `evaluation.py` tile-by-tile (hoje só funciona no caminho legado)

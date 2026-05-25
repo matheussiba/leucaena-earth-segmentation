@@ -53,6 +53,7 @@ chain lives in a single place.
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import ctypes
 import glob
@@ -539,7 +540,122 @@ def _cleanup_stale_tmp(folder: str) -> int:
     return removed
 
 
+# =============================================================================
+# Argparse (CLI mode — called by run_pipeline.py or directly)
+# =============================================================================
+
+#: Columns tried in order when --id-column is not specified.
+_AUTO_ID_COLUMNS_RGBNIR = ("NOMENC_10K", "NOMENC_5K", "NOMENC_2K")
+
+
+def _detect_id_column(gpkg_path: str, layer: str) -> str:
+    """Return the first matching auto-detect column, or raise."""
+    import geopandas as gpd
+
+    try:
+        gdf = gpd.read_file(gpkg_path, layer=layer)
+    except Exception as exc:
+        raise RuntimeError(f"Cannot open {gpkg_path!r} layer={layer!r}: {exc}") from exc
+    for candidate in _AUTO_ID_COLUMNS_RGBNIR:
+        if candidate in gdf.columns:
+            return candidate
+    for col in gdf.columns:
+        if gdf[col].dtype == object and col.lower() != "geometry":
+            return col
+    raise ValueError(
+        f"Cannot detect tile-ID column in {layer!r}. "
+        f"Available: {list(gdf.columns)}"
+    )
+
+
+def _parse_args_rgbnir() -> argparse.Namespace | None:
+    """Return parsed args when the script is invoked with CLI flags, else None."""
+    if len(sys.argv) == 1:
+        return None
+
+    p = argparse.ArgumentParser(
+        description=(
+            "Step 2 — Fuse RGB + IR tiles into 4-band RGBNIR GeoTIFFs. "
+            "Tile IDs are read from a GeoPackage AOI layer."
+        )
+    )
+    p.add_argument(
+        "--aoi",
+        required=True,
+        help="Path to the GeoPackage (.gpkg) that contains the AOI layer.",
+    )
+    p.add_argument(
+        "--layer",
+        required=True,
+        help="Layer name inside the GeoPackage.",
+    )
+    p.add_argument(
+        "--id-column",
+        default=None,
+        help=(
+            "Tile-ID column inside the layer "
+            f"(auto-detected from {_AUTO_ID_COLUMNS_RGBNIR} if not given)."
+        ),
+    )
+    p.add_argument(
+        "--source-rgb",
+        default=SOURCE_RGB_FOLDER,
+        help="Folder with source RGB tiles (default: %(default)s)",
+    )
+    p.add_argument(
+        "--source-ir",
+        default=SOURCE_IR_FOLDER,
+        help="Folder with source IR tiles (default: %(default)s)",
+    )
+    p.add_argument(
+        "--out-dir",
+        default=OUTPUT_FOLDER,
+        help="Output folder for fused RGBNIR tiles (default: %(default)s)",
+    )
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help=f"Parallel worker processes (default: {MAX_WORKERS})",
+    )
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Re-process tiles that already exist at the destination.",
+    )
+    return p.parse_args()
+
+
 def main() -> None:
+    global AOI_GPKG_PATH, AOI_LAYER_SPECS, AOI_LAYER_SUFFIX
+    global SOURCE_RGB_FOLDER, SOURCE_IR_FOLDER, OUTPUT_FOLDER
+    global MAX_WORKERS, OVERWRITE_EXISTING_FILES
+
+    # Patch module globals with CLI args when the script is invoked from the
+    # pipeline (or directly with flags). When run with no flags, all globals
+    # keep their default values and the script behaves exactly as before.
+    _args = _parse_args_rgbnir()
+    if _args is not None:
+        AOI_GPKG_PATH = _args.aoi
+        col = _args.id_column or _detect_id_column(_args.aoi, _args.layer)
+        # Override AOI_LAYER_SPECS with a single explicit layer spec so that
+        # _load_aoi_tile_jobs() reads exactly the layer the caller requested.
+        AOI_LAYER_SPECS = [
+            {
+                "layer": _args.layer,
+                "id_column": col,
+                "enabled": True,
+                "gpkg_path": _args.aoi,
+            }
+        ]
+        SOURCE_RGB_FOLDER = _args.source_rgb
+        SOURCE_IR_FOLDER = _args.source_ir
+        OUTPUT_FOLDER = _args.out_dir
+        if _args.workers is not None:
+            MAX_WORKERS = _args.workers
+        if _args.overwrite:
+            OVERWRITE_EXISTING_FILES = True
+
     t_start = time.time()
 
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)

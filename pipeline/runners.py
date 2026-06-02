@@ -22,6 +22,7 @@ Why threading?
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import threading
 from pathlib import Path
@@ -104,12 +105,17 @@ def run_cmd(
     if cwd:
         log.debug("  cwd: %s", cwd)
 
+    env = os.environ.copy()
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
+
     try:
         proc = subprocess.Popen(
             [str(c) for c in cmd],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=cwd,
+            env=env,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -144,12 +150,12 @@ def run_cmd(
 
     if proc.returncode != 0:
         log.error(
-            "Process exited with code %d  ← %s",
+            "Process exited with code %d  <- %s",
             proc.returncode,
             display,
         )
     else:
-        log.debug("Process exited with code 0  ← %s", display)
+        log.debug("Process exited with code 0  <- %s", display)
 
     return proc.returncode
 

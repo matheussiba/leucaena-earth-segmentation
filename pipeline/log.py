@@ -48,6 +48,16 @@ def setup_logging(
     """
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Windows PowerShell may expose stdout/stderr as cp1252. Our pipeline logs
+    # include paths, GDAL messages, and a few Unicode separators; without this,
+    # logging itself can raise UnicodeEncodeError before the real pipeline error
+    # is visible. Python 3.7+ supports reconfigure() on text streams.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file    = log_dir / f"pipeline_{timestamp}.log"
     latest_file = log_dir / "pipeline_latest.log"

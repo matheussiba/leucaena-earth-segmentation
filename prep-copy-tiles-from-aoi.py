@@ -147,6 +147,115 @@ def _collect_tile_jobs(loaded: dict[str, dict[str, Any]]) -> tuple[list[dict[str
     return jobs_rgb_ir, jobs_laz
 
 
+def _simulate_copy(
+    type_label: str,
+    source_dir: str,
+    dest_dir: str,
+    tile_ids: list[str],
+    use_cascade: bool = True,
+) -> dict[str, Any]:
+    """Check what would happen if we ran a copy without touching any file.
+
+    Returns a dict with keys:
+        type_label, source_dir, dest_dir,
+        already_exist  (int)   -- files already in dest
+        need_copy      (int)   -- files found in source but missing in dest
+        missing_tiles  (list)  -- tile IDs for which no file was found in source
+        source_missing (bool)  -- True when source_dir does not exist at all
+    """
+    if not os.path.exists(source_dir):
+        return {
+            "type_label": type_label,
+            "source_dir": source_dir,
+            "dest_dir": dest_dir,
+            "already_exist": 0,
+            "need_copy": 0,
+            "missing_tiles": list(tile_ids),
+            "source_missing": True,
+        }
+
+    source_names = os.listdir(source_dir)
+    dest_names: set[str] = set(os.listdir(dest_dir)) if os.path.exists(dest_dir) else set()
+
+    already_exist = 0
+    need_copy = 0
+    missing_tiles: list[str] = []
+
+    for tid in tile_ids:
+        parts = str(tid).split("-") if use_cascade else [str(tid)]
+        matched: list[str] = []
+        while parts:
+            matched = _find_files_by_token(source_names, "-".join(parts))
+            if matched:
+                break
+            if not use_cascade:
+                break
+            parts.pop()
+
+        if matched:
+            for fname in matched:
+                if fname in dest_names:
+                    already_exist += 1
+                else:
+                    need_copy += 1
+        else:
+            missing_tiles.append(str(tid))
+
+    return {
+        "type_label": type_label,
+        "source_dir": source_dir,
+        "dest_dir": dest_dir,
+        "already_exist": already_exist,
+        "need_copy": need_copy,
+        "missing_tiles": missing_tiles,
+        "source_missing": False,
+    }
+
+
+def _print_simulate_report(results: list[dict[str, Any]], enabled: list[bool]) -> None:
+    """Print a human-readable dry-run report and a final verdict."""
+    print()
+    print("=" * 60)
+    print("DRY-RUN REPORT")
+    print("=" * 60)
+
+    anything_to_do = False
+
+    for r, active in zip(results, enabled):
+        if not active:
+            continue
+        label = r["type_label"]
+        print(f"\n  {label}")
+        print(f"    source : {r['source_dir']}")
+        print(f"    dest   : {r['dest_dir']}")
+        if r["source_missing"]:
+            print(f"    [ERROR] Source directory not found.")
+            anything_to_do = True
+            continue
+        print(f"    already in dest : {r['already_exist']}")
+        print(f"    need to copy    : {r['need_copy']}")
+        print(f"    not in source   : {len(r['missing_tiles'])}")
+        if r["missing_tiles"]:
+            shown = r["missing_tiles"][:5]
+            for m in shown:
+                print(f"      MISS: {m}")
+            if len(r["missing_tiles"]) > 5:
+                print(f"      ... and {len(r['missing_tiles']) - 5} more")
+        if r["need_copy"] > 0:
+            anything_to_do = True
+
+    print()
+    print("-" * 60)
+    if anything_to_do:
+        total_copy = sum(r["need_copy"] for r in results)
+        print(f"ACTION NEEDED: {total_copy} file(s) to copy.")
+        print("Run the same command WITHOUT --dry-run to copy them.")
+    else:
+        print("OK: all expected files are already in the destination.")
+        print("Run without --dry-run to confirm (nothing will be re-copied).")
+    print("=" * 60)
+
+
 def _find_files_by_token(source_files: list[str], token: str) -> list[str]:
     """Return filenames whose basename matches ``token`` as a whole token before extension .tif/.laz."""
     pattern = re.compile(
@@ -430,13 +539,14 @@ def main() -> None:
         dry_run   = args.dry_run
 
         if dry_run:
-            print(
-                f"[DRY-RUN] Would copy up to {len(jobs_laz)} LAZ, "
-                f"{len(jobs_rgb_ir)} RGB, {len(jobs_rgb_ir)} IR tiles."
-            )
-            print(f"  LAZ  {src_laz}  →  {dest_laz}")
-            print(f"  RGB  {src_rgb}  →  {dest_rgb}")
-            print(f"  IR   {src_ir}  →  {dest_ir}")
+            tile_ids = [j["tile_id"] for j in jobs_rgb_ir]
+            print(f"[DRY-RUN] AOI has {len(tile_ids)} tile(s). Simulating copy...")
+            results = [
+                _simulate_copy("LAZ", src_laz, dest_laz, tile_ids, use_cascade=False),
+                _simulate_copy("RGB", src_rgb, dest_rgb, tile_ids, use_cascade=True),
+                _simulate_copy("IR",  src_ir,  dest_ir,  tile_ids, use_cascade=True),
+            ]
+            _print_simulate_report(results, [do_laz, do_rgb, do_ir])
             return
 
         for d in (dest_laz, dest_rgb, dest_ir):

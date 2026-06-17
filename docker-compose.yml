@@ -15,6 +15,8 @@ services:
       # have LAZ point clouds yet). Host paths come from .env.
       - "${LEUCAENA_LAZ_HOST_DIR}:/data/laz"
       - "${LEUCAENA_LIDAR_HOST_DIR}:/data/lidar"
+      # Tile-based patches (produced by prep-patches-from-tiles.py).
+      - "${LEUCAENA_PATCHES_HOST_DIR}:/data/patches"
       # Predictions output (kept off OneDrive on purpose; can fill tens of GB).
       - "${LEUCAENA_PREDICTIONS_HOST_DIR}:/data/predictions"
     environment:
@@ -27,6 +29,7 @@ services:
       - LEUCAENA_MASKS_PATH=${LEUCAENA_MASKS_PATH}
       - LEUCAENA_LAZ_DIR=${LEUCAENA_LAZ_DIR}
       - LEUCAENA_LIDAR_DIR=${LEUCAENA_LIDAR_DIR}
+      - LEUCAENA_PATCHES_DIR=${LEUCAENA_PATCHES_DIR}
       - LEUCAENA_PREDICTIONS_DIR=${LEUCAENA_PREDICTIONS_DIR}
     deploy:
       resources:

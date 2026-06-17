@@ -161,9 +161,13 @@ try:
     # Dynamic import: experiment id must match an existing conf/model_<id>.py
     model_m = importlib.import_module(f'conf.model_{args.experiment}')
     model, lidar_bands = model_m.get_model()
+    # Optional flag: model configs can set COMPUTE_NDVI = True to append
+    # NDVI as an extra optical channel on-the-fly in PatchFileDataset.
+    compute_ndvi = getattr(model_m, 'COMPUTE_NDVI', False)
 
     print(f'{model.__class__.__name__}')
     print(f'Patch source: {args.patch_source}')
+    print(f'Compute NDVI on-the-fly: {compute_ndvi}')
 
     if args.patch_source == 'file':
         manifest_path = str(args.manifest)
@@ -175,6 +179,7 @@ try:
             data_aug=args.data_aug,
             lidar_bands=lidar_bands,
             cache_in_ram=args.cache_patches,
+            compute_ndvi=compute_ndvi,
         )
         ds_val = PatchFileDataset(
             manifest_path=manifest_path,
@@ -183,6 +188,7 @@ try:
             data_aug=False,
             lidar_bands=lidar_bands,
             cache_in_ram=args.cache_patches,
+            compute_ndvi=compute_ndvi,
         )
     else:
         path_to_patches_train = os.path.join(paths.PREPARED_PATH, 'train_patches.npy')

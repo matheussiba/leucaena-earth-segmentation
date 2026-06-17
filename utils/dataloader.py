@@ -15,10 +15,6 @@ Patch indices in ``train_patches.npy`` / ``val_patches.npy`` are produced by
 # and implement __len__ and __getitem__ so DataLoader can iterate over them.
 from torch.utils.data import Dataset
 
-# ToTensor converts a numpy HWC array (Height x Width x Channels) to a
-# PyTorch CHW tensor (Channels x Height x Width) and normalises uint8 to [0, 1].
-from torchvision.transforms import ToTensor
-
 # one_hot converts an integer class label (0, 1, ...) to a binary vector.
 # Example: one_hot(tensor(1), num_classes=2) → [0, 1]
 # Not used in the current forward pass (CrossEntropyLoss accepts class indices directly),
@@ -26,26 +22,102 @@ from torchvision.transforms import ToTensor
 from torch.nn.functional import one_hot
 
 import torch
+import torch.nn.functional as F
 import numpy as np
 import os
 import csv
 from conf import paths, general
 import random
 
-# hflip / vflip: horizontal and vertical flip augmentations from torchvision.
-# affine: arbitrary-angle rotation + translation in one call (post-rotation
-# translation, integer pixel offsets). InterpolationMode picks the resampler:
-# BILINEAR for continuous data (opt, lidar), NEAREST for the label so class
-# indices stay valid (no fractional class ids).
-# All three transforms are applied to image AND label identically so spatial
-# alignment is preserved.
-from torchvision.transforms.functional import hflip, vflip, affine, InterpolationMode
-
 # view_as_windows: creates a sliding-window view of an array without copying data.
 # Used here to extract patch index grids over the full scene.
 # view_as_blocks: similar but uses non-overlapping blocks — an alternative to
 # sliding windows, useful if you want perfectly tiled (non-overlapping) patches.
 from skimage.util import view_as_windows, view_as_blocks
+
+
+class ToTensor:
+    """Small torchvision-free replacement for transforms.ToTensor.
+
+    Converts HWC numpy arrays to CHW float tensors. uint8 inputs are scaled to
+    [0, 1]; float inputs keep their existing scale.
+    """
+
+    def __call__(self, array):
+        tensor = torch.as_tensor(array)
+        if tensor.ndim == 2:
+            tensor = tensor.unsqueeze(0)
+        elif tensor.ndim == 3:
+            tensor = tensor.permute(2, 0, 1)
+        if tensor.dtype == torch.uint8:
+            tensor = tensor.float().div(255.0)
+        else:
+            tensor = tensor.float()
+        return tensor.contiguous()
+
+
+class InterpolationMode:
+    BILINEAR = "bilinear"
+    NEAREST = "nearest"
+
+
+def hflip(tensor: torch.Tensor) -> torch.Tensor:
+    return torch.flip(tensor, dims=(-1,))
+
+
+def vflip(tensor: torch.Tensor) -> torch.Tensor:
+    return torch.flip(tensor, dims=(-2,))
+
+
+def affine(
+    tensor: torch.Tensor,
+    *,
+    angle: float,
+    translate: list[int],
+    scale: float,
+    shear: list[float],
+    interpolation: str,
+    fill: float,
+) -> torch.Tensor:
+    """Torch-only affine transform for CHW/HW tensors.
+
+    This avoids importing torchvision, whose PIL dependency can require a
+    libtiff ABI that is not present in the Docker image.
+    """
+    if shear != [0.0, 0.0]:
+        raise ValueError("Shear augmentation is not supported by this lightweight affine helper.")
+    squeeze_channel = tensor.ndim == 2
+    x = tensor.unsqueeze(0) if not squeeze_channel else tensor.unsqueeze(0).unsqueeze(0)
+    original_dtype = x.dtype
+    x = x.float()
+
+    _, _, h, w = x.shape
+    tx, ty = translate
+    radians = -float(angle) * np.pi / 180.0
+    cos_a = float(np.cos(radians)) / float(scale)
+    sin_a = float(np.sin(radians)) / float(scale)
+    theta = torch.tensor(
+        [[cos_a, -sin_a, -2.0 * tx / max(w, 1)], [sin_a, cos_a, -2.0 * ty / max(h, 1)]],
+        dtype=torch.float32,
+        device=x.device,
+    ).unsqueeze(0)
+
+    grid = F.affine_grid(theta, size=x.shape, align_corners=False)
+    mode = "nearest" if interpolation == InterpolationMode.NEAREST else "bilinear"
+    out = F.grid_sample(x, grid, mode=mode, padding_mode="zeros", align_corners=False)
+    if fill != 0:
+        valid = F.grid_sample(
+            torch.ones((1, 1, h, w), dtype=torch.float32, device=x.device),
+            grid,
+            mode="nearest",
+            padding_mode="zeros",
+            align_corners=False,
+        )
+        out = torch.where(valid > 0.5, out, torch.full_like(out, float(fill)))
+
+    out = out.to(original_dtype) if original_dtype.is_floating_point else out.round().to(original_dtype)
+    out = out.squeeze(0)
+    return out.squeeze(0) if squeeze_channel else out
 
 def _augment_opt_lidar_label(
     opt_tensor: torch.Tensor,
@@ -232,7 +304,12 @@ class PatchFileDataset(Dataset):
         transformer=ToTensor(),
         lidar_bands=None,
         cache_in_ram: bool = False,
+        compute_ndvi: bool = False,
     ) -> None:
+        # When True, NDVI = (NIR - RED) / (NIR + RED) is computed on-the-fly
+        # from the optical patch (BGRN order: R=2, NIR=3) and appended as a
+        # 5th optical channel. The model input then has N_OPTICAL_BANDS + 1
+        # channels in x[0]. Enable via COMPUTE_NDVI = True in the model config.
         if split not in ("train", "val", "test"):
             raise ValueError(f"Unknown split: {split!r}")
         if patches_dir is None:
@@ -264,6 +341,8 @@ class PatchFileDataset(Dataset):
         if self.n_classes < general.N_CLASSES:
             # Background-only patches still count toward the binary task.
             self.n_classes = general.N_CLASSES
+
+        self.compute_ndvi = compute_ndvi
 
         self._cache: dict[str, tuple] | None = None
         if cache_in_ram:
@@ -336,6 +415,16 @@ class PatchFileDataset(Dataset):
 
         # /255.0 -> float32 in [0, 1]; ToTensor will move HWC -> CHW.
         opt_float = (opt_uint8.astype(np.float32) / 255.0)
+
+        if self.compute_ndvi:
+            # BGRN stored order: B=0, G=1, R=2, NIR=3
+            red = opt_float[:, :, 2]
+            nir = opt_float[:, :, 3]
+            denom = nir + red
+            denom = np.where(denom == 0.0, 1e-6, denom)
+            ndvi = np.clip((nir - red) / denom, -1.0, 1.0).astype(np.float32)
+            opt_float = np.concatenate([opt_float, ndvi[:, :, np.newaxis]], axis=-1)
+
         opt_tensor = self.transformer(opt_float).to(self.device)
 
         if lidar_arr is not None:

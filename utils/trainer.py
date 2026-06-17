@@ -8,7 +8,11 @@ from tqdm import tqdm
 import sys
 import torch
 import os
-from torchmetrics.classification import MulticlassF1Score
+from torchmetrics.classification import (
+    MulticlassF1Score,
+    MulticlassPrecision,
+    MulticlassRecall,
+)
 from torch.nn.functional import one_hot
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
@@ -69,19 +73,41 @@ def val_loop(dataloader, model, loss_fn):
     num_steps = len(dataloader)
     val_loss, f1_sum, steps = 0, 0, 0
     f1 = MulticlassF1Score(num_classes=general.N_CLASSES, ignore_index = general.DISCARDED_CLASS)
+    # Per-class metrics (average=None -> one value per class). These are
+    # *accumulated* over the whole validation split and computed once at the
+    # end, which is the correct way to read the leucaena Precision/Recall/F1
+    # (NOT a per-batch average). Class indices: 0 = background, 1 = leucaena
+    # (see conf/general.py). The leucaena Precision is the number tied to the
+    # false-positive problem: low Precision = many background pixels called leucaena.
+    prec_pc = MulticlassPrecision(num_classes=general.N_CLASSES, ignore_index=general.DISCARDED_CLASS, average=None)
+    rec_pc = MulticlassRecall(num_classes=general.N_CLASSES, ignore_index=general.DISCARDED_CLASS, average=None)
+    f1_pc = MulticlassF1Score(num_classes=general.N_CLASSES, ignore_index=general.DISCARDED_CLASS, average=None)
     with torch.no_grad():
         pbar = tqdm(dataloader, file=sys.stderr, dynamic_ncols=True)
         for X, y in pbar:
             pred = model(X)
             loss = loss_fn(pred, y)
             steps += 1
-            f1_sum += f1(pred.to('cpu'), y.to('cpu'))
+            pred_cpu, y_cpu = pred.to('cpu'), y.to('cpu')
+            f1_sum += f1(pred_cpu, y_cpu)
+            prec_pc.update(pred_cpu, y_cpu)
+            rec_pc.update(pred_cpu, y_cpu)
+            f1_pc.update(pred_cpu, y_cpu)
             val_loss += loss.item()
             pbar.set_description(f'Val Loss: {val_loss/steps:.4f}, F1-Score:{f1_sum/steps:.4f}  ')
 
     val_loss /= num_steps
     f1_avg = float(f1_sum / steps)
-    print(f"Average Validation Loss: {val_loss:.4f}, Average F1-Score: {f1_avg:.4f}")
+    print(f"Average Validation Loss: {val_loss:.4f}, Average F1-Score (macro): {f1_avg:.4f}")
+    # Per-class breakdown — the leucaena line is what matters for the
+    # false-positive problem; the macro F1 above averages it with the (easy)
+    # background class and hides it.
+    p, r, fc = prec_pc.compute(), rec_pc.compute(), f1_pc.compute()
+    BG, LEUC = 0, 1
+    print(
+        f"  [per-class val] leucaena   : Precision={p[LEUC]:.4f}  Recall={r[LEUC]:.4f}  F1={fc[LEUC]:.4f}\n"
+        f"  [per-class val] background : Precision={p[BG]:.4f}  Recall={r[BG]:.4f}  F1={fc[BG]:.4f}"
+    )
     return val_loss, f1_avg
 
 def val_sample_image(dataloader, model, path_to_samples, epoch):

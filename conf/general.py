@@ -5,10 +5,7 @@ Tweak patch size / splits here; paths live in ``conf/paths.py``, CLI defaults in
 """
 # --- Patch geometry ---
 PATCH_SIZE = 256
-# 0.6 = 60% overlap between adjacent patches (step = 0.4 * PATCH_SIZE).
-# Higher than the previous 0.5 default to give the network more views of each
-# leucaena region (professor's suggestion to reduce class confusion).
-PATCH_OVERLAP = 0.6
+PATCH_OVERLAP = 0.6 # 60% overlap between adjacent patches (step = (1 - PATCH_OVERLAP) * PATCH_SIZE).
 
 # --- File prefixes for prepared numpy arrays ---
 PREFIX_LABEL = 'label'
@@ -68,7 +65,12 @@ LEARNING_RATE_SCHEDULER_MILESTONES = [5, 20]
 CLASSES_WEIGHTS = [0.3, 0.7]
 
 # --- Early stopping ---
-EARLY_STOP_MIN_EPOCHS = LEARNING_RATE_SCHEDULER_MILESTONES[-1]
+# Warmup before the FIRST checkpoint can be saved. With min_epochs = 5 the
+# EarlyStop skips saving during epochs 1-5 and writes the first model.pt at
+# epoch 6 (see utils/trainer.py EarlyStop.testEpoch — first save happens at
+# min_epochs + 1). Lowered from 20 so a usable checkpoint exists early, in
+# case training is interrupted before convergence.
+EARLY_STOP_MIN_EPOCHS = 5
 
 EARLY_STOP_PATIENCE = 15
 

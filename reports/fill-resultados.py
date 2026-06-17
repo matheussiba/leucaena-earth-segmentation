@@ -127,6 +127,36 @@ def run_plot_training(exp: int) -> None:
         print(f"  Warning: training_curves.png not found at {src}")
 
 
+def run_viz_patches(patches_dir: str) -> None:
+    """Generate exactly 2 patch panels: dense leucaena and hard (sparse) leucaena."""
+    FIGURAS_DIR.mkdir(parents=True, exist_ok=True)
+    for select, out_name in [
+        ("most-leucaena", "patch_densa.png"),
+        ("hard",          "patch_dificil.png"),
+    ]:
+        tmp_dir = FIGURAS_DIR / f"_tmp_{select}"
+        cmd = [
+            sys.executable, str(ROOT / "viz-patches.py"),
+            "--patches-dir", patches_dir,
+            "--select", select,
+            "--top-k", "1",
+            "--out-dir", str(tmp_dir),
+        ]
+        print(f"  viz-patches ({select}): {' '.join(cmd[-4:])}")
+        result = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
+        # viz-patches.py saves <tmp_dir>/<patch_id>.png — move first file found
+        pngs = list(tmp_dir.glob("*.png")) if tmp_dir.exists() else []
+        if pngs:
+            dst = FIGURAS_DIR / out_name
+            shutil.move(str(pngs[0]), str(dst))
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            print(f"    -> {dst}")
+        else:
+            print(f"    Warning: no PNG produced for select={select!r}. Check viz-patches.py output.")
+            if result.stderr:
+                print(result.stderr[:400])
+
+
 # ---------------------------------------------------------------------------
 # Template filling
 # ---------------------------------------------------------------------------
@@ -249,12 +279,19 @@ def main() -> None:
 
     # 3. Training curves
     if not args.no_plot:
-        print(f"\n[3/3] Curvas de treino")
+        print(f"\n[3/4] Curvas de treino")
         run_plot_training(exp)
     else:
-        print("\n[3/3] Curvas de treino — pulado (--no-plot)")
+        print("\n[3/4] Curvas de treino — pulado (--no-plot)")
 
-    # 4. Fill template
+    # 4. Patch panels: 1 dense + 1 hard (figures 5.1 and 5.2)
+    print(f"\n[4/4] Painéis de patch (densa + difícil)")
+    run_viz_patches(patches_dir)
+    print("  Figs 5.3 e 5.4 (predição boa/difícil) precisam do modelo treinado:")
+    print(f"    python inspect_validation_errors.py -e {exp} --split val --top-k 1 --rank-by f1")
+    print(f"    python inspect_validation_errors.py -e {exp} --split val --top-k 1 --rank-by fp")
+
+    # 6. Fill template
     print(f"\nPreenchendo {TEMPLATE_PATH} ...")
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
     filled = fill_template(template, manifest, metrics)

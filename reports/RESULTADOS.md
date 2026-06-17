@@ -132,23 +132,45 @@ e a altura (CHM) ao mesmo tempo.
 
 ## 5. Resultados qualitativos
 
-### 5.1 Exemplos de patches (entrada + rótulo + predição)
+> **Total: 5 figuras (+ curvas = 6 no relatório).** Cada painel mostra as camadas
+> que o modelo enxerga (RGB, CIR, NDVI, CHM, rótulo) ou a predição sobre o rótulo real.
 
-![Painel de patches](figuras/patches_exemplos.png)
+### 5.1 Patch com muita leucaena (área densa)
 
-> 💡 Use o `viz-patches.py` (camadas RGB, infravermelho/CIR, NDVI, CHM, rótulo) para
-> mostrar *o que o modelo enxerga*, e o `inspect_validation_errors.py` para mostrar
-> **acertos e erros** (TP verde, FP vermelho, FN azul) lado a lado com a predição.
-> Escolha 3–6 patches: alguns bons, e 1–2 difíceis (mostram honestidade).
+![Patch densa](figuras/patch_densa.png)
 
-### 5.2 Mapa de predição na cena (QGIS) — *o visual mais forte*
+> 💡 `python reports/fill-resultados.py` gera isso automaticamente.
+> Mostra RGB · CIR · NDVI · CHM · rótulo refinado do patch com maior fração de leucaena.
+
+### 5.2 Patch com pouca leucaena (área difícil)
+
+![Patch difícil](figuras/patch_dificil.png)
+
+> 💡 Gerado automaticamente. Patch em que o modelo tem mais dificuldade — baixa fração
+> de leucaena, misturado com fundo. Útil para mostrar a complexidade do problema.
+
+### 5.3 Predição — exemplo bom (acerto)
+
+![Predição boa](figuras/pred_boa.png)
+
+> 💡 `inspect_validation_errors.py -e 4 --split val --top-k 1 --rank-by f1`
+> Sobreposição: rótulo real vs. predição. Verde = verdadeiro positivo.
+
+### 5.4 Predição — exemplo difícil (erros)
+
+![Predição difícil](figuras/pred_dificil.png)
+
+> 💡 `inspect_validation_errors.py -e 4 --split val --top-k 1 --rank-by fp`
+> Vermelho = falso positivo (modelo chamou leucaena mas era fundo).
+> Mostrar o erro é honestidade científica — e justifica os próximos passos.
+
+### 5.5 Mapa de predição na cena completa (QGIS)
 
 ![Mapa de predição](figuras/mapa_predicao.png)
 
-> 💡 Gerado por `prediction.py` / `predict-tiles.py` (GeoTIFF). No QGIS, sobreponha a
-> predição (leucaena em cor sólida, ~50% transparência) sobre a imagem real. Mostre:
-> (a) uma área onde acerta bem; (b) uma área com falso positivo (seja honesto — é o
-> que justifica os próximos passos). Veja [`COMO-GERAR-FIGURAS.md`](COMO-GERAR-FIGURAS.md).
+> 💡 Gerado por `prediction.py -e 4` → GeoTIFF. No QGIS, sobreponha sobre a imagem real.
+> Mostre: (a) uma área com muita leucaena bem detectada; (b) uma área com falso positivo.
+> Veja [`COMO-GERAR-FIGURAS.md`](COMO-GERAR-FIGURAS.md).
 
 ---
 

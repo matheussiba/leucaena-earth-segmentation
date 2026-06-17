@@ -40,8 +40,18 @@ LIDAR_INTENSITY_MAX = 32768.0
 #   NDVI >= LEUCAENA_NDVI_MIN  (filters towers / antennas / bare ground)
 # Otherwise it becomes background (0). Pixels OUTSIDE every polygon are
 # labelled IGNORE_INDEX (255) so the loss and metrics simply skip them.
-LEUCAENA_CHM_MIN_M = 4.5
-LEUCAENA_NDVI_MIN = 0.3
+#
+# NDVI threshold calibrated to THIS imagery: the IGC-SP aerial orthophotos are
+# 8-bit with a modest NIR response, so vegetation NDVI sits around 0.2-0.36
+# (not the 0.6-0.9 of satellite reflectance). A textbook 0.3 cut sliced through
+# the middle of real canopy and produced a "salt-and-pepper" label. With the
+# height filter (>=4 m) already removing grass/shrubs, NDVI>=0.1 still rejects
+# the non-vegetated tall surfaces (towers, roofs, bare ground sit near 0 or
+# negative) while keeping the canopy continuous. See diag-bands.py /
+# viz-ndvi-sweep.py for the diagnosis (band order confirmed correct: band 3 is
+# the true NIR).
+LEUCAENA_CHM_MIN_M = 4.0
+LEUCAENA_NDVI_MIN = 0.1
 
 # --- Data augmentation (training only, PatchFileDataset) ---
 # Continuous random rotation in [0, AUG_ROTATION_DEG) degrees, applied with

@@ -39,17 +39,17 @@ Isso faz tudo de uma vez:
 
 ## Passo 3 — Figuras de predição (4 e 5, manual)
 
-### 3a. Predição boa (Fig 5.3 — `pred_boa.png`)
+### 3. Predição boa + difícil (Figs 5.3 e 5.4)
 ```bash
-python inspect_validation_errors.py -e 4 --split val --top-k 1 --rank-by f1
-```
-- Gera: `experiments/exp_4/diagnostics/val/panels/` → copie o PNG para `reports/figuras/pred_boa.png`
+# Gera os 2 piores patches por F1 (rank 1 = mais erros, rank 2 = segundo pior)
+python inspect_validation_errors.py -e 4 --split val --top-k 2 --rank-by f1
 
-### 3b. Predição difícil (Fig 5.4 — `pred_dificil.png`)
-```bash
-python inspect_validation_errors.py -e 4 --split val --top-k 1 --rank-by fp
+# Copiar para reports/figuras/
+cp experiments/exp_4/diagnostics/val/panels/001_*.png reports/figuras/pred_dificil.png
+cp experiments/exp_4/diagnostics/val/panels/002_*.png reports/figuras/pred_boa.png
 ```
-- Gera: `experiments/exp_4/diagnostics/val/panels/` → copie o PNG para `reports/figuras/pred_dificil.png`
+- `--rank-by` aceita: `loss`, `iou`, `f1` (ascendente para iou/f1 = pior primeiro)
+- O rank 1 tem mais erros (FP/FN); o rank 2 é um pouco melhor — use como "exemplo bom"
 
 ---
 

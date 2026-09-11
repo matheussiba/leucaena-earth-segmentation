@@ -52,9 +52,19 @@ class DestLayout:
         return self.root / "lidar" / "raw"
 
     @property
+    def lidar_rasters(self) -> Path:
+        """2-band LiDAR GeoTIFFs: band 1=CHM, band 2=Intensity."""
+        return self.root / "lidar" / "rasters"
+
+    @property
+    def lidar_raster(self) -> Path:
+        """Backward-compatible alias. Prefer ``lidar_rasters`` in new code."""
+        return self.lidar_rasters
+
+    @property
     def lidar_chm(self) -> Path:
-        """CHM + Intensity GeoTIFFs  (Step 3 output, Step 4 input)."""
-        return self.root / "lidar" / "chm"
+        """Backward-compatible alias. Prefer ``lidar_rasters`` in new code."""
+        return self.lidar_rasters
 
     # ------------------------------------------------------------------
     # ML data
@@ -98,7 +108,7 @@ class DestLayout:
             self.opt_raw_ir,
             self.opt_rgbnir,
             self.lidar_raw,
-            self.lidar_chm,
+            self.lidar_rasters,
             self.annotations,
             self.patches,
             self.models_logs,

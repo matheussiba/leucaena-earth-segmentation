@@ -159,6 +159,16 @@ Resume from step 3 (skip copy + fuse already done):
         metavar="N",
         help="Parallel workers for step 2 RGBNIR fusion (default: 4).",
     )
+    p.add_argument(
+        "--lidar-workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Parallel workers for step 3 LAZ -> LiDAR rasters (default: 1). "
+            "Use 2 carefully; LiDAR jobs are RAM/disk intensive."
+        ),
+    )
 
     # ---- Step selection ----------------------------------------------------
     p.add_argument(
@@ -243,7 +253,7 @@ def _preflight_report(args: argparse.Namespace, layout: DestLayout, steps: set[i
         ("opt/raw/ir",   layout.opt_raw_ir),
         ("opt/rgbnir",   layout.opt_rgbnir),
         ("lidar/raw",    layout.lidar_raw),
-        ("lidar/chm",    layout.lidar_chm),
+        ("lidar/rasters", layout.lidar_rasters),
         ("annotations",  layout.annotations),
         ("patches",      layout.patches),
         ("models/logs",  layout.models_logs),
@@ -416,7 +426,8 @@ def step3_chm(args: argparse.Namespace, layout: DestLayout) -> int:
     n_rgbn = _count(layout.opt_rgbnir, ".tif")
     log.info("  Input LAZ   : %s  (%d .laz)", layout.lidar_raw,  n_laz)
     log.info("  Align RGBNIR: %s  (%d .tif)", layout.opt_rgbnir, n_rgbn)
-    log.info("  Output CHM  : %s", layout.lidar_chm)
+    log.info("  Output LiDAR rasters: %s", layout.lidar_rasters)
+    log.info("  LiDAR workers: %d", args.lidar_workers)
 
     if n_laz == 0:
         log.error(
@@ -427,13 +438,14 @@ def step3_chm(args: argparse.Namespace, layout: DestLayout) -> int:
 
     _log_volume_check(layout.lidar_raw,  "/data/laz")
     _log_volume_check(layout.opt_rgbnir, "/data/rgbnir")
-    _log_volume_check(layout.lidar_chm,  "/data/lidar")
+    _log_volume_check(layout.lidar_rasters, "/data/lidar")
 
     script_args: list[str] = [
         "python", "prep-lidar-rasters.py",
         "--laz-dir",   "/data/laz",
         "--tiles-dir", "/data/rgbnir",
         "--out-dir",   "/data/lidar",
+        "--workers",   str(args.lidar_workers),
     ]
     if args.overwrite:
         script_args.append("--overwrite")
@@ -444,7 +456,7 @@ def step3_chm(args: argparse.Namespace, layout: DestLayout) -> int:
         volumes={
             layout.lidar_raw:  ("/data/laz",    "ro"),
             layout.opt_rgbnir: ("/data/rgbnir", "ro"),
-            layout.lidar_chm:  ("/data/lidar",  "rw"),
+            layout.lidar_rasters: ("/data/lidar",  "rw"),
         },
         dry_run=args.dry_run,
         label="Step 3 — LAZ → CHM",
@@ -452,7 +464,7 @@ def step3_chm(args: argparse.Namespace, layout: DestLayout) -> int:
     )
 
     if rc == 0:
-        _log_dir_count(layout.lidar_chm, ".tif", "CHM tiles")
+        _log_dir_count(layout.lidar_rasters, ".tif", "LiDAR rasters")
     return rc
 
 
@@ -461,9 +473,9 @@ def step4_patches(args: argparse.Namespace, layout: DestLayout) -> int:
     _step_header(4, "Patch Generation  (prep-patches-from-tiles.py, Docker)")
 
     n_rgbn = _count(layout.opt_rgbnir, ".tif")
-    n_chm  = _count(layout.lidar_chm,  ".tif")
+    n_chm  = _count(layout.lidar_rasters, ".tif")
     log.info("  RGBNIR tiles : %s  (%d)", layout.opt_rgbnir, n_rgbn)
-    log.info("  CHM tiles    : %s  (%d)", layout.lidar_chm,  n_chm)
+    log.info("  LiDAR rasters: %s  (%d)", layout.lidar_rasters, n_chm)
 
     ann = _resolve_annotations(args, layout)
     log.info("  Annotations  : %s  (exists=%s)", ann, ann.exists())
@@ -487,7 +499,7 @@ def step4_patches(args: argparse.Namespace, layout: DestLayout) -> int:
     ann_container = f"/data/masks/{ann.name}"
 
     _log_volume_check(layout.opt_rgbnir, "/data/rgbnir")
-    _log_volume_check(layout.lidar_chm,  "/data/lidar")
+    _log_volume_check(layout.lidar_rasters, "/data/lidar")
     _log_volume_check(ann.parent,        "/data/masks")
     _log_volume_check(layout.patches,    "/data/patches")
 
@@ -506,7 +518,7 @@ def step4_patches(args: argparse.Namespace, layout: DestLayout) -> int:
         repo_dir=_REPO,
         volumes={
             layout.opt_rgbnir: ("/data/rgbnir", "ro"),
-            layout.lidar_chm:  ("/data/lidar",  "ro"),
+            layout.lidar_rasters: ("/data/lidar",  "ro"),
             ann.parent:        ("/data/masks",  "ro"),
             layout.patches:    ("/data/patches","rw"),
         },

@@ -97,17 +97,11 @@ def _reproject_layer_to_srs(
     layer: ogr.Layer, dst_srs: osr.SpatialReference
 ) -> tuple:
     """Return ``(vector DataSource/DataSet that must stay alive, burn_layer)``."""
-    if hasattr(layer, 'GetDataSource'):
-        owning_ds = layer.GetDataSource()
-    elif hasattr(layer, 'GetDataset'):
-        owning_ds = layer.GetDataset()
-    else:
-        owning_ds = None
-    if owning_ds is None:
-        raise RuntimeError('OGR Layer has no parent dataset (unexpected GDAL build).')
     src_srs = _srs_from_layer(layer)
     if src_srs.IsSame(dst_srs):
-        return owning_ds, layer
+        # No temporary datasource is needed. The caller is responsible for
+        # keeping the original vector datasource alive while rasterizing.
+        return None, layer
 
     print(
         f'  Reprojecting masks {src_srs.GetAuthorityCode(None)} '

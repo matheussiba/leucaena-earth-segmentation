@@ -17,6 +17,7 @@
 # =============================================================================
 
 from pathlib import Path
+from time import perf_counter
 
 from osgeo import gdal
 
@@ -30,6 +31,17 @@ RECURSE = False
 SKIP_EXISTING = True
 
 OVERVIEW_LEVELS = [2, 4, 8, 16, 32, 64]
+
+
+def format_duration(seconds: float) -> str:
+    seconds = max(0.0, float(seconds))
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, secs = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{int(minutes)}m {secs:04.1f}s"
+    hours, minutes = divmod(int(minutes), 60)
+    return f"{hours}h {minutes}m {secs:04.1f}s"
 
 
 def build_overview(tif_path: Path) -> None:
@@ -76,31 +88,71 @@ def main() -> None:
             unique.append(f)
     files = unique
 
-    print(f"Pasta: {folder}")
-    print(f"Arquivos encontrados: {len(files)}")
+    total = len(files)
+    print("")
+    print("=" * 60)
+    print("INICIO — geracao de overviews (.tif.ovr)")
+    print("=" * 60)
+    print(f"Pasta:    {folder}")
+    print(f"Tiles:    {total}")
+    print(f"Niveis:   {OVERVIEW_LEVELS}")
+    print(f"Recurse:  {RECURSE}")
+    print(f"Pular .ovr existente: {SKIP_EXISTING}")
+    print("=" * 60)
     print("")
 
+    if total == 0:
+        print("Nenhum .tif encontrado. Nada a fazer.")
+        print("FIM.")
+        return
+
     ok = skip = fail = 0
+    processed_times = []
+    t0_all = perf_counter()
+
     for i, tif in enumerate(files, start=1):
+        prefix = f"[{i}/{total}]"
         ovr = Path(str(tif) + ".ovr")
+
         if SKIP_EXISTING and ovr.exists():
-            print(f"[{i}/{len(files)}] pulando (ja tem .ovr): {tif.name}")
+            print(f"{prefix} PULADO (ja existe .ovr) — {tif.name}")
             skip += 1
             continue
 
-        print(f"[{i}/{len(files)}] criando overview: {tif}")
+        print(f"{prefix} PROCESSANDO — {tif.name}")
+        t0 = perf_counter()
         try:
             build_overview(tif)
+            elapsed = perf_counter() - t0
+            processed_times.append(elapsed)
             ok += 1
+            print(f"{prefix} CONCLUIDO — {tif.name}  |  tempo: {format_duration(elapsed)}")
         except Exception as exc:
-            print(f"  FALHOU: {tif.name} -> {exc}")
+            elapsed = perf_counter() - t0
             fail += 1
+            print(
+                f"{prefix} ERRO — {tif.name}  |  tempo: {format_duration(elapsed)}  |  {exc}"
+            )
+
+    total_elapsed = perf_counter() - t0_all
+    avg = (sum(processed_times) / len(processed_times)) if processed_times else 0.0
 
     print("")
-    print("======= RESUMO =======")
-    print(f"OK:      {ok}")
-    print(f"Pulados: {skip}")
-    print(f"Falhas:  {fail}")
+    print("=" * 60)
+    print("FIM — processamento concluido")
+    print("=" * 60)
+    print(f"Tiles no total:     {total}")
+    print(f"Gerados com sucesso:{ok:>4}")
+    print(f"Pulados:            {skip:>4}")
+    print(f"Com erro:           {fail:>4}")
+    if processed_times:
+        print(f"Tempo medio/tile:   {format_duration(avg)}")
+        print(f"Tile mais rapido:   {format_duration(min(processed_times))}")
+        print(f"Tile mais lento:    {format_duration(max(processed_times))}")
+    print(f"Tempo TOTAL:         {format_duration(total_elapsed)}")
+    print("=" * 60)
+    print("Pode fechar / parar aqui. O script terminou.")
+    print("")
 
 
 main()

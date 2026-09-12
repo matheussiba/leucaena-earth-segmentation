@@ -1,7 +1,8 @@
 # Python deps for the Docker image (PyTorch + CUDA come from the base image).
 # Pin versions for reproducible builds; bump intentionally when upgrading CUDA/PyTorch.
-torchvision==0.19.0
-torchmetrics==1.4.0.post0
+# torchvision must match the PyTorch base image (2.9.1 -> 0.24.1).
+torchvision==0.24.1
+torchmetrics==1.6.1
 numpy==1.26.4
 scikit-image==0.24.0
 scikit-learn==1.5.1
@@ -12,3 +13,13 @@ tqdm==4.66.5
 # (rasterio + geopandas) — the front of the pre-processing pipeline.
 geopandas==0.14.4
 rasterio==1.3.10
+
+# Option B (train_multitask.py) — the professor's multitask trainer.
+# - segmentation-models-pytorch: only needed for the smp backbones
+#   (unet/unetplusplus/manet/linknet). The default --arch resunet and BPATUNet
+#   are pure PyTorch and run WITHOUT this, so option B works on the current
+#   image until you want an smp backbone.
+# - tifffile: only used by the original "folders" data source for .tif patches;
+#   the manifest (.npy) path does not need it.
+segmentation-models-pytorch==0.3.4
+tifffile==2024.8.30

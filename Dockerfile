@@ -1,6 +1,8 @@
 # CUDA-enabled PyTorch image for leucaena-earth-segmentation
-# Base ships Python 3.11, PyTorch 2.4.x, CUDA 12.4, cuDNN 9 (conda env at /opt/conda)
-FROM pytorch/pytorch:2.4.0-cuda12.4-cudnn9-devel
+# RTX 50-series (Blackwell, sm_120) needs PyTorch >= 2.7 built with CUDA >= 12.8.
+# Older GPUs still work on CUDA 12.8 if the host NVIDIA driver is recent enough.
+# Base ships Python 3.11, PyTorch 2.9.x, CUDA 12.8, cuDNN 9 (conda env at /opt/conda)
+FROM pytorch/pytorch:2.9.1-cuda12.8-cudnn9-devel
 
 LABEL org.opencontainers.image.title="leucaena-earth-segmentation"
 LABEL org.opencontainers.image.description="PyTorch ResUNet segmentation with GDAL for aerial/LiDAR GeoTIFFs"
@@ -40,7 +42,8 @@ RUN apt-get update \
     && pip uninstall -y pillow || true \
     && conda remove -y --force pillow || true \
     && pip install --no-cache-dir --force-reinstall "pillow>=10,<11" \
-    && python -c "from PIL import Image; import matplotlib; import torchmetrics; print('PIL OK:', Image.__file__)"
+    && python -c "from PIL import Image; import matplotlib; import torchmetrics; print('PIL OK:', Image.__file__)" \
+    && python -c "import torch; print('PyTorch', torch.__version__, 'CUDA', torch.version.cuda)"
 
 # Source code is bind-mounted at /workspace; copy only for standalone image builds
 COPY . /workspace

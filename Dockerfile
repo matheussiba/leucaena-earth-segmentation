@@ -30,6 +30,18 @@ COPY requirements-docker.txt /tmp/requirements-docker.txt
 RUN pip install --no-cache-dir -r /tmp/requirements-docker.txt \
     && rm /tmp/requirements-docker.txt
 
+# Installing GDAL/PDAL via conda-forge upgrades libtiff to libtiff.so.6, which
+# breaks the Pillow that shipped in the base image (it was linked against
+# libtiff.so.5). Provide libtiff.so.5 at the OS level AND reinstall Pillow
+# from a pip wheel (bundles its own libtiff) so matplotlib/torchmetrics work.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libtiff5 \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip uninstall -y pillow || true \
+    && conda remove -y --force pillow || true \
+    && pip install --no-cache-dir --force-reinstall "pillow>=10,<11" \
+    && python -c "from PIL import Image; import matplotlib; import torchmetrics; print('PIL OK:', Image.__file__)"
+
 # Source code is bind-mounted at /workspace; copy only for standalone image builds
 COPY . /workspace
 

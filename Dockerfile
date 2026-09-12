@@ -10,7 +10,6 @@ LABEL org.opencontainers.image.description="PyTorch ResUNet segmentation with GD
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    CONDA_NO_PLUGINS=true \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \
     PROJ_LIB=/opt/conda/share/proj \
@@ -24,12 +23,14 @@ WORKDIR /workspace
 # - PDAL + python-pdal: needed by prep-lidar-rasters.py to turn LAZ point
 #   clouds into CHM + INTENSITY GeoTIFFs. Adds ~500 MB but keeps the LiDAR
 #   pipeline reproducible in the same image.
-# PDAL pulls sqlite 3.32.x, which breaks Python/conda until we reinstall sqlite.
-# Do not run `conda clean` here: it crashes while sqlite is broken. Wipe caches with rm.
+# PDAL pulls sqlite 3.32.x, which breaks Python sqlite3 until we reinstall sqlite.
+# After GDAL/PDAL, conda plugins may fail; use --solver classic + CONDA_NO_PLUGINS
+# only for the sqlite repair step. Never run `conda clean` here (use rm below).
 RUN conda install -y -c conda-forge \
         gdal proj proj-data libstdcxx-ng \
         pdal python-pdal \
-    && conda install -y -c conda-forge "sqlite>=3.45.0" "libsqlite>=3.45.0" \
+    && CONDA_NO_PLUGINS=1 conda install -y -c conda-forge --solver classic \
+        "sqlite>=3.45.0" "libsqlite>=3.45.0" \
     && python -c "import sqlite3; print('sqlite3 OK', sqlite3.sqlite_version)" \
     && rm -rf /opt/conda/pkgs/* /root/.conda/pkgs/* /root/.cache/conda/*
 

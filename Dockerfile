@@ -23,10 +23,14 @@ WORKDIR /workspace
 # - PDAL + python-pdal: needed by prep-lidar-rasters.py to turn LAZ point
 #   clouds into CHM + INTENSITY GeoTIFFs. Adds ~500 MB but keeps the LiDAR
 #   pipeline reproducible in the same image.
+# PDAL pulls an old sqlite (3.32.x) that breaks Python's sqlite3 module and
+# makes `conda clean` fail with "undefined symbol: sqlite3_deserialize".
 RUN conda install -y -c conda-forge \
         gdal proj proj-data libstdcxx-ng \
         pdal python-pdal \
-    && conda clean -afy
+    && conda install -y -c conda-forge "sqlite>=3.45.0" "libsqlite>=3.45.0" \
+    && python -c "import sqlite3; print('sqlite3 OK', sqlite3.sqlite_version)" \
+    && CONDA_NO_PLUGINS=true conda clean -afy
 
 COPY requirements-docker.txt /tmp/requirements-docker.txt
 RUN pip install --no-cache-dir -r /tmp/requirements-docker.txt \
@@ -40,7 +44,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libtiff5 \
     && rm -rf /var/lib/apt/lists/* \
     && pip uninstall -y pillow || true \
-    && conda remove -y --force pillow || true \
+    && CONDA_NO_PLUGINS=true conda remove -y --force pillow || true \
     && pip install --no-cache-dir --force-reinstall "pillow>=10,<11" \
     && python -c "from PIL import Image; import matplotlib; import torchmetrics; print('PIL OK:', Image.__file__)" \
     && python -c "import torch; print('PyTorch', torch.__version__, 'CUDA', torch.version.cuda)"

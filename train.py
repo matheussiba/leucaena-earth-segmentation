@@ -243,14 +243,12 @@ try:
         optimizer, 
         milestones = general.LEARNING_RATE_SCHEDULER_MILESTONES,
         gamma=general.LEARNING_RATE_SCHEDULER_GAMMA,
-        verbose = True
         )'''
 
     # ExponentialLR multiplies the LR by gamma every epoch (gentler, continuous decay).
     scheduler = ExponentialLR(
         optimizer, 
         gamma=general.LEARNING_RATE_SCHEDULER_GAMMA,
-        verbose = True
         )
 
     metrics_logger = MetricsLogger(logs_path)

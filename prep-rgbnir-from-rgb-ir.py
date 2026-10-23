@@ -44,6 +44,10 @@ Then::
 
     python prep-rgbnir-from-rgb-ir.py
 
+Or without AOI (scan rgb/ir folders, skip tiles already in the output folder)::
+
+    python prep-rgbnir-from-rgb-ir.py --from-folders --source-rgb D:\\rgb --source-ir D:\\ir --out-dir D:\\rgbir
+
 History
 -------
 Moved from ``leucaena-earth-utils/python/scripts/`` into this repository in
@@ -214,6 +218,68 @@ def _list_rasters(folder: str) -> list[str]:
     return [f for f in os.listdir(folder) if f.lower().endswith(RASTER_EXTENSIONS)]
 
 
+def _tile_key_from_filename(filename: str) -> str:
+    """Normalize an IGC RGB/IR filename to the bare tile id used as output name.
+
+    Handles the common wrappers seen on disk::
+
+        ORTM_RGB_<ID>_V1.tif
+        ORTM_IR_<ID>_V1.tif
+        <ID>_ORTO_RGB.tif / <ID>_ORTO-RGB.tif
+        <ID>_ORTO_IR.tif  / <ID>_ORTO-IR.tif
+        <ID>.tif
+    """
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    stem = re.sub(r"(?i)^ORTM_RGB_", "", stem)
+    stem = re.sub(r"(?i)^ORTM_IR_", "", stem)
+    stem = re.sub(r"(?i)_ORTO[_-]RGB$", "", stem)
+    stem = re.sub(r"(?i)_ORTO[_-]IR$", "", stem)
+    stem = re.sub(r"(?i)_V\d+$", "", stem)
+    return stem.strip()
+
+
+def _load_folder_tile_jobs(
+    rgb_folder: str, ir_folder: str
+) -> list[TileJob]:
+    """Build jobs from filename intersection of ``rgb_folder`` and ``ir_folder``.
+
+    No AOI is consulted. A tile is queued only when both sides resolve to the
+    same normalized tile key (see ``_tile_key_from_filename``).
+    """
+    rgb_names = _list_rasters(rgb_folder)
+    ir_names = _list_rasters(ir_folder)
+
+    rgb_by_key: dict[str, str] = {}
+    for name in rgb_names:
+        key = _tile_key_from_filename(name)
+        if key and key not in rgb_by_key:
+            rgb_by_key[key] = name
+
+    ir_by_key: dict[str, str] = {}
+    for name in ir_names:
+        key = _tile_key_from_filename(name)
+        if key and key not in ir_by_key:
+            ir_by_key[key] = name
+
+    paired = sorted(set(rgb_by_key) & set(ir_by_key))
+    rgb_only = sorted(set(rgb_by_key) - set(ir_by_key))
+    ir_only = sorted(set(ir_by_key) - set(rgb_by_key))
+
+    print("\n[FROM FOLDERS] Discovering tiles by filename (no AOI)", flush=True)
+    print(f"  RGB files: {len(rgb_names)} -> {len(rgb_by_key)} tile keys", flush=True)
+    print(f"  IR  files: {len(ir_names)} -> {len(ir_by_key)} tile keys", flush=True)
+    print(f"  Paired (RGB+IR): {len(paired)}", flush=True)
+    if rgb_only:
+        print(f"  RGB without IR: {len(rgb_only)} (skipped)", flush=True)
+    if ir_only:
+        print(f"  IR without RGB: {len(ir_only)} (skipped)", flush=True)
+
+    return [
+        TileJob(tile_id=tid, source_layer="from_folders", id_column="filename")
+        for tid in paired
+    ]
+
+
 def _match_for_token(filenames: Iterable[str], token: str) -> list[str]:
     """Return files whose name contains ``token`` as a whole alphanumeric token."""
     pattern = re.compile(
@@ -250,6 +316,48 @@ def _fmt_size(num_bytes: float) -> str:
             return f"{num_bytes:.1f} {unit}"
         num_bytes /= 1024.0
     return f"{num_bytes:.1f} PB"
+
+
+def _formatar_tempo(segundos: float) -> str:
+    """Human-readable duration (same style as TRANSFERIR_LAZ_RGB_IR_FROM_SHP)."""
+    m, s = divmod(int(max(0.0, segundos)), 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h}h {m:02d}m {s:02d}s"
+    return f"{m:02d}m {s:02d}s"
+
+
+def _progress_eta_line(
+    done: int, total: int, t_start: float, *, ahead: bool = False
+) -> str:
+    """Build a progress + ETA suffix like the transfer script.
+
+    ``done`` = tiles already finished. When ``ahead`` is True (serial path,
+    before starting tile ``done+1``), the percentage/count refer to the tile
+    about to start.
+    """
+    if total <= 0:
+        return ""
+    if ahead:
+        i = done + 1  # 1-based index of the tile about to start
+        pct = (i / total) * 100.0
+        finished = done
+        label = f"{i}/{total}"
+    else:
+        pct = (done / total) * 100.0
+        finished = done
+        label = f"{done}/{total}"
+
+    restantes = total - finished
+    if finished <= 0:
+        eta = " | Calculando tempo..."
+    else:
+        tempo_por_tile = (time.time() - t_start) / finished
+        eta = (
+            f" | Restam: {_formatar_tempo(tempo_por_tile * restantes)}"
+            f" | Faltam: {restantes}"
+        )
+    return f"[{pct:6.2f}%] {label}{eta}"
 
 
 def _safe_remove(path: str) -> None:
@@ -576,17 +684,26 @@ def _parse_args_rgbnir() -> argparse.Namespace | None:
     p = argparse.ArgumentParser(
         description=(
             "Step 2 — Fuse RGB + IR tiles into 4-band RGBNIR GeoTIFFs. "
-            "Tile IDs are read from a GeoPackage AOI layer."
+            "Use --aoi/--layer (pipeline) or --from-folders (scan rgb+ir)."
         )
     )
     p.add_argument(
+        "--from-folders",
+        action="store_true",
+        help=(
+            "Ignore AOI: discover tile pairs by matching filenames in "
+            "--source-rgb and --source-ir. Existing outputs are skipped "
+            "unless --overwrite is set."
+        ),
+    )
+    p.add_argument(
         "--aoi",
-        required=True,
+        default=None,
         help="Path to the GeoPackage (.gpkg) that contains the AOI layer.",
     )
     p.add_argument(
         "--layer",
-        required=True,
+        default=None,
         help="Layer name inside the GeoPackage.",
     )
     p.add_argument(
@@ -623,7 +740,10 @@ def _parse_args_rgbnir() -> argparse.Namespace | None:
         action="store_true",
         help="Re-process tiles that already exist at the destination.",
     )
-    return p.parse_args()
+    args = p.parse_args()
+    if not args.from_folders and (not args.aoi or not args.layer):
+        p.error("Provide --aoi and --layer, or use --from-folders.")
+    return args
 
 
 def main() -> None:
@@ -635,19 +755,9 @@ def main() -> None:
     # pipeline (or directly with flags). When run with no flags, all globals
     # keep their default values and the script behaves exactly as before.
     _args = _parse_args_rgbnir()
+    from_folders = False
     if _args is not None:
-        AOI_GPKG_PATH = _args.aoi
-        col = _args.id_column or _detect_id_column(_args.aoi, _args.layer)
-        # Override AOI_LAYER_SPECS with a single explicit layer spec so that
-        # _load_aoi_tile_jobs() reads exactly the layer the caller requested.
-        AOI_LAYER_SPECS = [
-            {
-                "layer": _args.layer,
-                "id_column": col,
-                "enabled": True,
-                "gpkg_path": _args.aoi,
-            }
-        ]
+        from_folders = bool(_args.from_folders)
         SOURCE_RGB_FOLDER = _args.source_rgb
         SOURCE_IR_FOLDER = _args.source_ir
         OUTPUT_FOLDER = _args.out_dir
@@ -655,16 +765,35 @@ def main() -> None:
             MAX_WORKERS = _args.workers
         if _args.overwrite:
             OVERWRITE_EXISTING_FILES = True
+        if not from_folders:
+            AOI_GPKG_PATH = _args.aoi
+            col = _args.id_column or _detect_id_column(_args.aoi, _args.layer)
+            # Override AOI_LAYER_SPECS with a single explicit layer spec so that
+            # _load_aoi_tile_jobs() reads exactly the layer the caller requested.
+            AOI_LAYER_SPECS = [
+                {
+                    "layer": _args.layer,
+                    "id_column": col,
+                    "enabled": True,
+                    "gpkg_path": _args.aoi,
+                }
+            ]
 
     t_start = time.time()
 
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
     _cleanup_stale_tmp(OUTPUT_FOLDER)
 
-    jobs = _load_aoi_tile_jobs()
-    if not jobs:
-        print("[ABORT] No tile ids in AOI.")
-        return
+    if from_folders:
+        jobs = _load_folder_tile_jobs(SOURCE_RGB_FOLDER, SOURCE_IR_FOLDER)
+        if not jobs:
+            print("[ABORT] No RGB+IR filename pairs found.")
+            return
+    else:
+        jobs = _load_aoi_tile_jobs()
+        if not jobs:
+            print("[ABORT] No tile ids in AOI.")
+            return
 
     rgb_names = _list_rasters(SOURCE_RGB_FOLDER)
     ir_names = _list_rasters(SOURCE_IR_FOLDER)
@@ -731,9 +860,18 @@ def main() -> None:
     else:
         workers = max(1, int(MAX_WORKERS))
         mode = "serial" if workers == 1 else f"parallel ({workers} workers)"
+        total_ready = len(ready_jobs)
+        # Re-number prefixes against the actual work queue (not the AOI scan).
+        for i, job_args in enumerate(ready_jobs, 1):
+            job_args["log_prefix"] = f"[{i}/{total_ready}]"
         print(
-            f"\nProcessing {len(ready_jobs)} tile(s) in {mode}. "
+            f"\nProcessing {total_ready} tile(s) in {mode}. "
             f"GDAL threads/tile={GDAL_NUM_THREADS}, cache={GDAL_CACHEMAX_MB} MB.",
+            flush=True,
+        )
+        print(
+            f"  Already skipped existing: {skipped_existing} | "
+            f"Queued to write: {total_ready}",
             flush=True,
         )
 
@@ -741,7 +879,13 @@ def main() -> None:
         # 2a) Serial path: identical to previous behaviour (logs per block)
         # --------------------------------------------------------------
         if workers == 1:
-            for job_args in ready_jobs:
+            t_batch = time.time()
+            for i, job_args in enumerate(ready_jobs, 1):
+                prog = _progress_eta_line(i - 1, total_ready, t_batch, ahead=True)
+                print(
+                    f"\n{prog} Processando: {job_args['tile_id']}",
+                    flush=True,
+                )
                 t_tile = time.time()
                 try:
                     status, detail = _fuse_one_tile(
@@ -765,13 +909,15 @@ def main() -> None:
                 if status == "ok":
                     written += 1
                     print(
-                        f"{job_args['log_prefix']} OK   {job_args['tile_id']} -> {job_args['out_name']}  "
-                        f"(tile total {time.time() - t_tile:.1f}s)",
+                        f"{_progress_eta_line(i, total_ready, t_batch)} OK   "
+                        f"{job_args['tile_id']} -> {job_args['out_name']}  "
+                        f"(tile {time.time() - t_tile:.1f}s)",
                         flush=True,
                     )
                 else:
                     print(
-                        f"{job_args['log_prefix']} FAIL {job_args['tile_id']} {status}: {detail}",
+                        f"{_progress_eta_line(i, total_ready, t_batch)} FAIL "
+                        f"{job_args['tile_id']} {status}: {detail}",
                         flush=True,
                     )
 
@@ -780,6 +926,7 @@ def main() -> None:
         # --------------------------------------------------------------
         else:
             try:
+                t_batch = time.time()
                 with ProcessPoolExecutor(max_workers=workers) as pool:
                     futures = {pool.submit(_process_tile_job, j): j for j in ready_jobs}
                     completed = 0
@@ -790,7 +937,8 @@ def main() -> None:
                         except Exception as exc:  # noqa: BLE001
                             job_args = futures[fut]
                             print(
-                                f"{job_args['log_prefix']} CRASH {job_args['tile_id']}: "
+                                f"{_progress_eta_line(completed, total_ready, t_batch)} CRASH "
+                                f"{job_args['tile_id']}: "
                                 f"{type(exc).__name__}: {exc}",
                                 flush=True,
                             )
@@ -805,17 +953,18 @@ def main() -> None:
                             result["tile_id"], result["source_layer"],
                             result["rgb_name"], result["ir_name"], status, result["detail"],
                         ))
+                        prog = _progress_eta_line(completed, total_ready, t_batch)
                         if status == "ok":
                             written += 1
                             print(
-                                f"[done {completed}/{len(ready_jobs)}] OK   "
+                                f"{prog} OK   "
                                 f"{result['tile_id']} -> {result['out_name']}  "
                                 f"({result['elapsed_s']:.1f}s)",
                                 flush=True,
                             )
                         else:
                             print(
-                                f"[done {completed}/{len(ready_jobs)}] FAIL "
+                                f"{prog} FAIL "
                                 f"{result['tile_id']} {status}: {result['detail']}",
                                 flush=True,
                             )
@@ -826,9 +975,13 @@ def main() -> None:
     print("\n" + "=" * 60)
     print("OVERALL SUMMARY")
     print("=" * 60)
-    print(f"  Unique tiles in AOI: {len(jobs)}")
+    print(f"  Unique tiles queued: {len(jobs)}")
     print(f"  Written:             {written}")
     print(f"  Skipped existing:    {skipped_existing}")
+    if written > 0:
+        print(
+            f"  Avg time/written:    {_formatar_tempo((time.time() - t_start) / written)}",
+        )
 
     by_status: dict[str, int] = {}
     for s in summaries:

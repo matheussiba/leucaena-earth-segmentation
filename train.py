@@ -118,7 +118,36 @@ parser.add_argument(
     'Much faster epochs; use when you have free memory.',
 )
 
+parser.add_argument(
+    '--max-epochs',
+    type=int,
+    default=None,
+    help=f'Override conf.general.MAX_EPOCHS (default: {general.MAX_EPOCHS}).',
+)
+
+parser.add_argument(
+    '--early-stop-patience',
+    type=int,
+    default=None,
+    help=f'Override EARLY_STOP_PATIENCE (default: {general.EARLY_STOP_PATIENCE}).',
+)
+
+parser.add_argument(
+    '--early-stop-min-epochs',
+    type=int,
+    default=None,
+    help=f'Override EARLY_STOP_MIN_EPOCHS before first checkpoint (default: {general.EARLY_STOP_MIN_EPOCHS}).',
+)
+
 args = parser.parse_args()
+
+# Optional CLI overrides for short paper/debug runs
+if args.max_epochs is not None:
+    general.MAX_EPOCHS = args.max_epochs
+if args.early_stop_patience is not None:
+    general.EARLY_STOP_PATIENCE = args.early_stop_patience
+if args.early_stop_min_epochs is not None:
+    general.EARLY_STOP_MIN_EPOCHS = args.early_stop_min_epochs
 
 
 class Tee:

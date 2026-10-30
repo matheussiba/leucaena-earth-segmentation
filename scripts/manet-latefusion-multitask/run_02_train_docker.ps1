@@ -59,7 +59,7 @@ docker compose run --rm manet-latefusion-multitask python scripts/manet-latefusi
   --epochs 50 `
   --lr 1e-4 `
   --amp `
-  --num_workers 4 `
+  --num_workers 2 `
   --cudnn_benchmark True `
   --resume False `
   --w_reg 1.5 `

@@ -5,6 +5,8 @@ services:
   manet-latefusion-multitask:
     image: leucaena-segmentation:cuda
     working_dir: /workspace
+    # PyTorch DataLoader workers precisam de /dev/shm maior que o default 64MB
+    shm_size: "8gb"
     volumes:
       - ../..:/workspace
       - ${AOI_HOST}:/data/aoi

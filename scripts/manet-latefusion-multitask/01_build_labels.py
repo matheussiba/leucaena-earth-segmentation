@@ -22,10 +22,33 @@ except ImportError:
 # Remove-Item Env:PROJ_DATA -ErrorAction SilentlyContinue
 # Remove-Item Env:GDAL_DATA -ErrorAction SilentlyContinue
 
+def _load_chm_on_grid(chm_path, height, width, transform, crs, band=1):
+    """Le a banda CHM alinhada a grade de referencia (reprojeta se preciso)."""
+    from rasterio.warp import reproject, Resampling
+    with rasterio.open(chm_path) as src:
+        chm = np.zeros((height, width), dtype=np.float32)
+        reproject(
+            source=rasterio.band(src, band),
+            destination=chm,
+            src_transform=src.transform,
+            src_crs=src.crs,
+            dst_transform=transform,
+            dst_crs=crs,
+            resampling=Resampling.bilinear,
+        )
+        nodata = src.nodatavals[band - 1] if src.nodatavals else None
+    if nodata is not None and np.isfinite(nodata):
+        chm[chm == nodata] = np.nan
+    chm[~np.isfinite(chm)] = 0.0
+    return chm
+
+
 def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
                               apply_gaussian=True, gaussian_sigma=5, calc_distance=True, seed=42,
                               classes_dist_map=None, dist_map_as_cluster=False,
-                              cluster_edge_m=10.0):
+                              cluster_edge_m=10.0,
+                              chm_path=None, chm_band=1, chm_min_m=3.0,
+                              chm_filter_class=1):
     """
     Converte um shapefile em raster de treino e teste baseados em uma imagem de referência.
     Gera imagens rotuladas, e opcionalmente mapas de distância suavizados (Gaussiano)
@@ -141,6 +164,13 @@ def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
         }
     }
     
+    chm = None
+    if chm_path:
+        print(f"\n2b. Lendo CHM para filtrar classe {chm_filter_class} "
+              f"(manter so onde CHM > {chm_min_m} m)...")
+        chm = _load_chm_on_grid(chm_path, height, width, transform, crs, band=chm_band)
+        print(f"   CHM: min={float(np.nanmin(chm)):.2f} max={float(np.nanmax(chm)):.2f} m")
+
     # --- LOOP DE PROCESSAMENTO PARA TREINO E TESTE ---
     for split_name, split_data in splits.items():
         print(f"\n 🚀 Processando conjunto de {split_name.upper()}...")
@@ -156,11 +186,19 @@ def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
             fill=0,
             dtype=rasterio.int32
         )
+
+        # Buracos de leucaena com CHM baixo -> classe 0 (fundo)
+        if chm is not None:
+            low = (labeled_array == int(chm_filter_class)) & (chm <= float(chm_min_m))
+            n_low = int(low.sum())
+            labeled_array[low] = 0
+            print(f"   CHM <= {chm_min_m} m na classe {chm_filter_class}: "
+                  f"{n_low:,} px -> classe 0")
         
         meta_label = meta.copy()
         meta_label.update({'count': 1, 'dtype': rasterio.uint8, 'nodata': 0})
         with rasterio.open(split_data['label_path'], 'w', **meta_label) as dst:
-            dst.write(labeled_array, 1)
+            dst.write(labeled_array.astype(np.uint8), 1)
         print(f"   ✅ Imagem rotulada salva: {split_data['label_path']}")
 
         # 4b. Exporta o VETOR do split (apenas as copas deste conjunto).
@@ -198,6 +236,18 @@ def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
                 )
             else:   # split sem polígonos dessas classes → mapa todo 0
                 instance_array = np.zeros((height, width), dtype=np.int32)
+
+            # Distancia so onde leucaena sobreviveu ao filtro CHM (label ainda = classe alvo)
+            if chm is not None and int(chm_filter_class) in (
+                    set(classes_dist_map) if classes_dist_map is not None
+                    else set(np.unique(labeled_array))):
+                drop = (instance_array > 0) & (
+                    (labeled_array != int(chm_filter_class)) | (chm <= float(chm_min_m))
+                )
+                n_drop = int(drop.sum())
+                instance_array[drop] = 0
+                print(f"   Distancia: removidos {n_drop:,} px de instancia com "
+                      f"CHM <= {chm_min_m} m (ou label != {chm_filter_class})")
 
             inside = instance_array > 0
 
@@ -342,6 +392,16 @@ if __name__ == "__main__":
                         'incerteza da borda, metade para cada lado da linha. 0 = máscara '
                         'dura; 1 m em pixel de 2 m já equivale a máscara dura (resta só a '
                         'suavização gaussiana). ~10 m (±5 m) se o traçado for incerto.')
+    p.add_argument('--chm_path', default="",
+                   help='Raster CHM (mesma AOI). Se fornecido, pixels da classe '
+                        '--chm_filter_class com CHM <= --chm_min_m viram classe 0 '
+                        'e saem do mapa de distancia.')
+    p.add_argument('--chm_band', type=int, default=1,
+                   help='Banda do CHM no raster (1 = primeira).')
+    p.add_argument('--chm_min_m', type=float, default=3.0,
+                   help='Altura minima (m) para manter leucaena / distancia.')
+    p.add_argument('--chm_filter_class', type=int, default=1,
+                   help='Classe no raster de rotulos a filtrar pelo CHM (1=leucaena).')
     a = p.parse_args()
 
     # Execute a função com suporte ao filtro Gaussiano e Normalização per-ITC
@@ -358,4 +418,8 @@ if __name__ == "__main__":
                           if a.classes_dist_map is not None else None),
         dist_map_as_cluster=a.dist_map_as_cluster,
         cluster_edge_m=a.cluster_edge_m,
+        chm_path=(a.chm_path or None),
+        chm_band=a.chm_band,
+        chm_min_m=a.chm_min_m,
+        chm_filter_class=a.chm_filter_class,
     )

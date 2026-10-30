@@ -186,16 +186,21 @@ def plot_figures(img, ref, pred, depth, dist, model_dir, epoch, set_name,
         else:
             pred_processed = pred[:batch, :, :].astype(np.uint8)
 
-        all_unique = np.unique(np.concatenate([np.unique(ref_processed),
-                                               np.unique(pred_processed)]))
-        n_classes = len(all_unique)
-        if n_classes <= 3:
-            colors = ['black', 'blue', 'red'][:n_classes]
-        elif n_classes <= 10:
-            colors = plt.cm.tab10(np.linspace(0, 1, n_classes))
-        else:
-            colors = plt.cm.viridis(np.linspace(0, 1, n_classes))
-        discrete_cmap = ListedColormap(colors)
+        # Cores fixas (0..5) — nao depender dos uniques do batch
+        # 0 cinza | 1 verde | 2 rosa | 3 gold | 4 orange | 5 red
+        class_colors = [
+            '#808080',  # 0 gray
+            '#2ca02c',  # 1 green (leucaena)
+            '#ff69b4',  # 2 pink
+            '#ffd700',  # 3 gold
+            '#ff8c00',  # 4 orange
+            '#d62728',  # 5 red
+        ]
+        discrete_cmap = ListedColormap(class_colors)
+        all_unique = np.arange(len(class_colors), dtype=np.uint8)
+        # clip para a escala da barra de cores
+        ref_processed = np.clip(ref_processed, 0, len(class_colors) - 1)
+        pred_processed = np.clip(pred_processed, 0, len(class_colors) - 1)
 
     # ── Monta a sequência de linhas conforme a task ───────────
     # cada item: (tipo, título)
@@ -263,12 +268,14 @@ def plot_figures(img, ref, pred, depth, dist, model_dir, epoch, set_name,
                     _label_cbar(ax, im, 'Predicted distance')
             elif kind == 'lbl_gt':
                 im = ax.imshow(ref_processed[col], cmap=discrete_cmap,
-                               vmin=all_unique.min(), vmax=all_unique.max())
+                               vmin=0, vmax=len(discrete_cmap.colors) - 1,
+                               interpolation='nearest')
                 if col == ncols - 1:
                     _label_cbar(ax, im, 'Class label', ticks=True)
             elif kind == 'lbl_pred':
                 im = ax.imshow(pred_processed[col], cmap=discrete_cmap,
-                               vmin=all_unique.min(), vmax=all_unique.max())
+                               vmin=0, vmax=len(discrete_cmap.colors) - 1,
+                               interpolation='nearest')
                 if col == ncols - 1:
                     _label_cbar(ax, im, 'Predicted class', ticks=True)
 

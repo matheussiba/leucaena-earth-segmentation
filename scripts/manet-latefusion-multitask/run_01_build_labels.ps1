@@ -1,4 +1,4 @@
-﻿# Etapa 1 - rasteriza poligonos multiclasse + mapa de pertinencia (macico) da leucaena.
+﻿# Etapa 1 - rasteriza poligonos + distancia (leucaena so onde CHM > 3 m).
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 . .\_load_aoi.ps1
@@ -10,6 +10,10 @@ New-Item -ItemType Directory -Force -Path $OUT | Out-Null
 python .\01_build_labels.py `
   --img_path  "$AOI\opt\rgbnir\SF-23-Y-A-IV-4-SO-A.tif" `
   --shp_path  "$AOI\annotations\261030-classes.gpkg" `
+  --chm_path  "$AOI\lidar\rasters\SF-23-Y-A-IV-4-SO-A.tif" `
+  --chm_band 1 `
+  --chm_min_m 3 `
+  --chm_filter_class 1 `
   --out_base_dir $OUT `
   --train_ratio 0.8 `
   --seed 27 `
@@ -26,3 +30,4 @@ Write-Host "Pronto. Veja: $OUT"
 Write-Host "  ITCs_classes_report.txt"
 Write-Host "  ITCs_labels_train.tif / ITCs_labels_test.tif"
 Write-Host "  ITCs_distance_train.tif / ITCs_distance_test.tif"
+Write-Host "  (classe 1 so onde CHM > 3 m; buracos -> classe 0)"

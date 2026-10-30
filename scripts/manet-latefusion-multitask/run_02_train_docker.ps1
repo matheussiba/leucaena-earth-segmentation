@@ -1,0 +1,74 @@
+﻿# Etapa 2 — treino multitask + late fusion (MANet) via Docker/GPU.
+# Requer: Docker Desktop ligado + imagem leucaena-segmentation:cuda já buildada.
+$ErrorActionPreference = "Stop"
+Set-Location $PSScriptRoot
+
+$AOI_HOST = "C:\00_DATASETS_AI\261002-riodaspedras-aoi"
+$EXP_HOST = Join-Path $AOI_HOST "experiments\manet-latefusion-multitask"
+$MASKS_HOST = Join-Path $EXP_HOST "masks"
+$MODEL_HOST = Join-Path $EXP_HOST "models"
+
+if (-not (Test-Path (Join-Path $MASKS_HOST "ITCs_labels_train.tif"))) {
+    throw "Rode primeiro run_01_build_labels.ps1 (falta ITCs_labels_train.tif em $MASKS_HOST)"
+}
+New-Item -ItemType Directory -Force -Path $MODEL_HOST | Out-Null
+
+# Caminhos DENTRO do container (compose monta AOI em /data/aoi)
+$IMG  = "/data/aoi/opt/rgbnir/SF-23-Y-A-IV-4-SO-A.tif"
+$CHM  = "/data/aoi/lidar/rasters/SF-23-Y-A-IV-4-SO-A.tif"
+$REF  = "/data/aoi/experiments/manet-latefusion-multitask/masks/ITCs_labels_train.tif"
+$DIST = "/data/aoi/experiments/manet-latefusion-multitask/masks/ITCs_distance_train.tif"
+$MDIR = "/data/aoi/experiments/manet-latefusion-multitask/models"
+
+Write-Host "Subindo container e iniciando treino..."
+Write-Host "  arch=manet | multitask | latefusion | channels=4 | lidar_channels=2"
+Write-Host "  patch_size=256 (~64 m @ 0.25 m) | num_classes=6 | ignore fundo"
+
+docker compose run --rm manet-latefusion-multitask python scripts/manet-latefusion-multitask/02_train.py `
+  --on_the_fly True `
+  --image_path $IMG `
+  --ref_path $REF `
+  --depth_path $DIST `
+  --chm_path $CHM `
+  --model_dir $MDIR `
+  --arch manet `
+  --pretrained `
+  --channels 4 `
+  --lidar_channels 2 `
+  --latefusion True `
+  --fusion concat `
+  --task_multitask True `
+  --task_classification False `
+  --task_regression False `
+  --dist_guided False `
+  --num_classes 6 `
+  --ignore_index True `
+  --ignore_class_value 0 `
+  --rgb_normalize True `
+  --rgb_norm_method minmax `
+  --lidar_norm minmax `
+  --rgb_resolution 0.25 `
+  --chm_resolution 0.25 `
+  --patch_size 256 `
+  --batch_size 8 `
+  --samples 10000 `
+  --val_samples 2000 `
+  --val_fraction 0.2 `
+  --val_block_size 1024 `
+  --oversample True `
+  --epochs 50 `
+  --lr 1e-4 `
+  --amp `
+  --num_workers 4 `
+  --cudnn_benchmark True `
+  --resume False `
+  --w_reg 1.5 `
+  --w_seg 1.0 `
+  --reg_loss l1 `
+  --reg_include_bg False `
+  --reg_mask_source label `
+  --class_weights inverse `
+  --learn_task_weights True
+
+Write-Host ""
+Write-Host "Modelo em: $MODEL_HOST"

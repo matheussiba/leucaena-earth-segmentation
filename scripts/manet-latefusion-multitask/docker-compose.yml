@@ -1,0 +1,25 @@
+﻿# Compose isolado do experimento manet-latefusion-multitask.
+# Não substitui o docker-compose.yml da raiz do repo.
+services:
+  manet-latefusion-multitask:
+    image: leucaena-segmentation:cuda
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - C:/00_DATASETS_AI/261002-riodaspedras-aoi:/data/aoi
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - PROJ_LIB=/opt/conda/share/proj
+      - GDAL_DATA=/opt/conda/share/gdal
+      - GTIFF_SRS_SOURCE=EPSG
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true
+    command: bash

@@ -68,13 +68,14 @@ docker compose run --rm manet-latefusion-multitask python scripts/manet-latefusi
   --val_fraction 0.2 `
   --val_block_size 1024 `
   --oversample True `
-  --epochs 50 `
+  --epochs 60 `
+  --save_every 15 `
   --lr 1e-4 `
   --amp `
   --num_workers $numWorkers `
   --prefetch_factor $prefetch `
   --cudnn_benchmark True `
-  --resume False `
+  --resume True `
   --w_reg 1.5 `
   --w_seg 1.0 `
   --reg_loss l1 `

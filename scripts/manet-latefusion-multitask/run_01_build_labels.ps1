@@ -4,7 +4,7 @@ Set-Location $PSScriptRoot
 . .\_load_aoi.ps1
 $AOI = $AOI_HOST
 
-$OUT = Join-Path $AOI "experiments\$MANET_EXP_NAME\masks"
+$OUT = Join-Path $AOI "experiments\$EXPERIMENT_NAME\masks"
 New-Item -ItemType Directory -Force -Path $OUT | Out-Null
 
 python .\01_build_labels.py `

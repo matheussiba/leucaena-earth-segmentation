@@ -1,9 +1,9 @@
-﻿# Etapa 2 - treino MANet late fusion. Pasta = MANET_EXP_NAME (v2 nao sobrescreve v1).
+﻿# Etapa 2 - treino MANet late fusion. Pasta = EXPERIMENT_NAME (v2 nao sobrescreve v1).
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 . .\_load_aoi.ps1
 
-$EXP_HOST = Join-Path $AOI_HOST "experiments\$MANET_EXP_NAME"
+$EXP_HOST = Join-Path $AOI_HOST "experiments\$EXPERIMENT_NAME"
 $MASKS_HOST = Join-Path $EXP_HOST "masks"
 $MODEL_HOST = Join-Path $EXP_HOST "models"
 
@@ -14,9 +14,9 @@ New-Item -ItemType Directory -Force -Path $MODEL_HOST | Out-Null
 
 $IMG  = "/data/aoi/opt/rgbnir/SF-23-Y-A-IV-4-SO-A.tif"
 $CHM  = "/data/aoi/lidar/rasters/SF-23-Y-A-IV-4-SO-A.tif"
-$REF  = "/data/aoi/experiments/$MANET_EXP_NAME/masks/ITCs_labels_train.tif"
-$DIST = "/data/aoi/experiments/$MANET_EXP_NAME/masks/ITCs_distance_train.tif"
-$MDIR = "/data/aoi/experiments/$MANET_EXP_NAME/models"
+$REF  = "/data/aoi/experiments/$EXPERIMENT_NAME/masks/ITCs_labels_train.tif"
+$DIST = "/data/aoi/experiments/$EXPERIMENT_NAME/masks/ITCs_distance_train.tif"
+$MDIR = "/data/aoi/experiments/$EXPERIMENT_NAME/models"
 
 # patch 512: batch menor que no v1 (256)
 $patchSize = 512
@@ -31,7 +31,7 @@ if ($TRAIN_PROFILE -eq "lab") {
 }
 
 Write-Host "Subindo container e iniciando treino..."
-Write-Host "  exp=$MANET_EXP_NAME | arch=manet | latefusion | multitask"
+Write-Host "  exp=$EXPERIMENT_NAME | arch=manet | latefusion | multitask"
 Write-Host "  profile=$TRAIN_PROFILE | patch=$patchSize | batch=$batchSize | workers=$numWorkers"
 
 docker compose run --rm manet-latefusion-multitask python scripts/manet-latefusion-multitask/02_train.py `

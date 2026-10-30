@@ -13,10 +13,10 @@ No `.env` da raiz:
 DIR_DATASETS_AI_PATH=E:/dados-msb/00_DATASETS_AI
 LEUCAENA_DATASET_ID=261002-riodaspedras-aoi
 TRAIN_PROFILE=lab
-MANET_EXP_NAME=manet-latefusion-multitask-v2
+EXPERIMENT_NAME=manet-latefusion-multitask-v2
 ```
 
-Para voltar a predizer a v1: `MANET_EXP_NAME=manet-latefusion-multitask`.
+Para voltar a predizer a v1: `EXPERIMENT_NAME=manet-latefusion-multitask`.
 
 ## Perfis
 

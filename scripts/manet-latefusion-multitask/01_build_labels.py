@@ -22,32 +22,45 @@ except ImportError:
 # Remove-Item Env:PROJ_DATA -ErrorAction SilentlyContinue
 # Remove-Item Env:GDAL_DATA -ErrorAction SilentlyContinue
 
-def _load_chm_on_grid(chm_path, height, width, transform, crs, band=1):
-    """Le a banda CHM alinhada a grade de referencia (reprojeta se preciso)."""
+def _reproject_band(src, band, height, width, transform, crs):
+    """Reprojeta uma banda do src para a grade de referencia."""
     from rasterio.warp import reproject, Resampling
-    with rasterio.open(chm_path) as src:
-        chm = np.zeros((height, width), dtype=np.float32)
-        reproject(
-            source=rasterio.band(src, band),
-            destination=chm,
-            src_transform=src.transform,
-            src_crs=src.crs,
-            dst_transform=transform,
-            dst_crs=crs,
-            resampling=Resampling.bilinear,
-        )
-        nodata = src.nodatavals[band - 1] if src.nodatavals else None
+    out = np.zeros((height, width), dtype=np.float32)
+    reproject(
+        source=rasterio.band(src, band),
+        destination=out,
+        src_transform=src.transform,
+        src_crs=src.crs,
+        dst_transform=transform,
+        dst_crs=crs,
+        resampling=Resampling.bilinear,
+    )
+    nodata = src.nodatavals[band - 1] if src.nodatavals else None
     if nodata is not None and np.isfinite(nodata):
-        chm[chm == nodata] = np.nan
-    chm[~np.isfinite(chm)] = 0.0
-    return chm
+        out[out == nodata] = np.nan
+    out[~np.isfinite(out)] = 0.0
+    return out
+
+
+def _load_chm_intensity_on_grid(chm_path, height, width, transform, crs,
+                                chm_band=1, intensity_band=2):
+    """Le CHM (+ intensidade se existir) alinhados a grade de referencia."""
+    with rasterio.open(chm_path) as src:
+        chm = _reproject_band(src, chm_band, height, width, transform, crs)
+        if src.count >= intensity_band:
+            inten = _reproject_band(src, intensity_band, height, width, transform, crs)
+        else:
+            # sem intensidade: cobre = CHM > 0 (aproximacao)
+            inten = (chm > 0).astype(np.float32)
+            print("   Aviso: raster sem banda de intensidade; cobertura ~= CHM > 0")
+    return chm, inten
 
 
 def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
                               apply_gaussian=True, gaussian_sigma=5, calc_distance=True, seed=42,
                               classes_dist_map=None, dist_map_as_cluster=False,
                               cluster_edge_m=10.0,
-                              chm_path=None, chm_band=1, chm_min_m=3.0,
+                              chm_path=None, chm_band=1, intensity_band=2, chm_min_m=2.0,
                               chm_filter_class=1):
     """
     Converte um shapefile em raster de treino e teste baseados em uma imagem de referência.
@@ -165,11 +178,19 @@ def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
     }
     
     chm = None
+    inten = None
+    lidar_cov = None
     if chm_path:
-        print(f"\n2b. Lendo CHM para filtrar classe {chm_filter_class} "
-              f"(manter so onde CHM > {chm_min_m} m)...")
-        chm = _load_chm_on_grid(chm_path, height, width, transform, crs, band=chm_band)
+        print(f"\n2b. Lendo CHM+INT para filtrar classe {chm_filter_class} "
+              f"(so onde ha LiDAR: INT>0 e CHM<={chm_min_m} -> classe 0; "
+              f"sem cobertura LiDAR mantem o poligono)...")
+        chm, inten = _load_chm_intensity_on_grid(
+            chm_path, height, width, transform, crs,
+            chm_band=chm_band, intensity_band=intensity_band,
+        )
+        lidar_cov = inten > 0
         print(f"   CHM: min={float(np.nanmin(chm)):.2f} max={float(np.nanmax(chm)):.2f} m")
+        print(f"   cobertura LiDAR (INT>0): {100.0 * float(lidar_cov.mean()):.2f}% da cena")
 
     # --- LOOP DE PROCESSAMENTO PARA TREINO E TESTE ---
     for split_name, split_data in splits.items():
@@ -187,13 +208,18 @@ def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
             dtype=rasterio.int32
         )
 
-        # Buracos de leucaena com CHM baixo -> classe 0 (fundo)
-        if chm is not None:
-            low = (labeled_array == int(chm_filter_class)) & (chm <= float(chm_min_m))
-            n_low = int(low.sum())
-            labeled_array[low] = 0
-            print(f"   CHM <= {chm_min_m} m na classe {chm_filter_class}: "
-                  f"{n_low:,} px -> classe 0")
+        # So filtra CHM baixo ONDE ha cobertura LiDAR (INT > 0).
+        # Sem cobertura: mantem o poligono (nao zera leucaena no gap).
+        if chm is not None and lidar_cov is not None:
+            cls = int(chm_filter_class)
+            in_cls = labeled_array == cls
+            low_with_lidar = in_cls & lidar_cov & (chm <= float(chm_min_m))
+            keep_no_lidar = in_cls & ~lidar_cov
+            n_low = int(low_with_lidar.sum())
+            n_keep_gap = int(keep_no_lidar.sum())
+            labeled_array[low_with_lidar] = 0
+            print(f"   COM LiDAR e CHM <= {chm_min_m} m: {n_low:,} px -> classe 0")
+            print(f"   SEM LiDAR (gap): {n_keep_gap:,} px mantidos como classe {cls}")
         
         meta_label = meta.copy()
         meta_label.update({'count': 1, 'dtype': rasterio.uint8, 'nodata': 0})
@@ -237,17 +263,17 @@ def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
             else:   # split sem polígonos dessas classes → mapa todo 0
                 instance_array = np.zeros((height, width), dtype=np.int32)
 
-            # Distancia so onde leucaena sobreviveu ao filtro CHM (label ainda = classe alvo)
+            # Distancia segue o label ja filtrado: remove px que nao sao mais a
+            # classe alvo (ex.: CHM baixo COM LiDAR). Gaps sem LiDAR (label
+            # mantido) continuam no mapa de distancia.
             if chm is not None and int(chm_filter_class) in (
                     set(classes_dist_map) if classes_dist_map is not None
-                    else set(np.unique(labeled_array))):
-                drop = (instance_array > 0) & (
-                    (labeled_array != int(chm_filter_class)) | (chm <= float(chm_min_m))
-                )
+                    else set(np.unique(labeled_array).tolist())):
+                drop = (instance_array > 0) & (labeled_array != int(chm_filter_class))
                 n_drop = int(drop.sum())
                 instance_array[drop] = 0
-                print(f"   Distancia: removidos {n_drop:,} px de instancia com "
-                      f"CHM <= {chm_min_m} m (ou label != {chm_filter_class})")
+                print(f"   Distancia: removidos {n_drop:,} px (label != {chm_filter_class} "
+                      f"apos filtro CHM so em areas com LiDAR)")
 
             inside = instance_array > 0
 
@@ -393,13 +419,15 @@ if __name__ == "__main__":
                         'dura; 1 m em pixel de 2 m já equivale a máscara dura (resta só a '
                         'suavização gaussiana). ~10 m (±5 m) se o traçado for incerto.')
     p.add_argument('--chm_path', default="",
-                   help='Raster CHM (mesma AOI). Se fornecido, pixels da classe '
-                        '--chm_filter_class com CHM <= --chm_min_m viram classe 0 '
-                        'e saem do mapa de distancia.')
+                   help='Raster CHM+INT (mesma AOI). Com cobertura LiDAR (INT>0), '
+                        'pixels da classe --chm_filter_class com CHM <= --chm_min_m '
+                        'viram classe 0. Sem cobertura LiDAR o poligono e mantido.')
     p.add_argument('--chm_band', type=int, default=1,
                    help='Banda do CHM no raster (1 = primeira).')
+    p.add_argument('--intensity_band', type=int, default=2,
+                   help='Banda de intensidade para detectar cobertura LiDAR (INT>0).')
     p.add_argument('--chm_min_m', type=float, default=2.0,
-                   help='Altura minima (m) para manter leucaena / distancia.')
+                   help='Altura minima (m) para manter leucaena / distancia (so com LiDAR).')
     p.add_argument('--chm_filter_class', type=int, default=1,
                    help='Classe no raster de rotulos a filtrar pelo CHM (1=leucaena).')
     a = p.parse_args()
@@ -420,6 +448,7 @@ if __name__ == "__main__":
         cluster_edge_m=a.cluster_edge_m,
         chm_path=(a.chm_path or None),
         chm_band=a.chm_band,
+        intensity_band=a.intensity_band,
         chm_min_m=a.chm_min_m,
         chm_filter_class=a.chm_filter_class,
     )

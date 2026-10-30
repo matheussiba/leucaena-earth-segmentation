@@ -1,10 +1,10 @@
-﻿# Etapa 1 - rasteriza poligonos + distancia (leucaena so onde CHM > 3 m).
+﻿# Etapa 1 - labels + distancia (CHM>2 so onde INT>0; gap LiDAR mantem poligono).
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 . .\_load_aoi.ps1
 $AOI = $AOI_HOST
 
-$OUT = Join-Path $AOI "experiments\manet-latefusion-multitask\masks"
+$OUT = Join-Path $AOI "experiments\$MANET_EXP_NAME\masks"
 New-Item -ItemType Directory -Force -Path $OUT | Out-Null
 
 python .\01_build_labels.py `
@@ -12,6 +12,7 @@ python .\01_build_labels.py `
   --shp_path  "$AOI\annotations\261030-classes.gpkg" `
   --chm_path  "$AOI\lidar\rasters\SF-23-Y-A-IV-4-SO-A.tif" `
   --chm_band 1 `
+  --intensity_band 2 `
   --chm_min_m 2 `
   --chm_filter_class 1 `
   --out_base_dir $OUT `
@@ -27,7 +28,4 @@ if ($LASTEXITCODE -ne 0) { throw "01_build_labels.py falhou (exit $LASTEXITCODE)
 
 Write-Host ""
 Write-Host "Pronto. Veja: $OUT"
-Write-Host "  ITCs_classes_report.txt"
-Write-Host "  ITCs_labels_train.tif / ITCs_labels_test.tif"
-Write-Host "  ITCs_distance_train.tif / ITCs_distance_test.tif"
-Write-Host "  (classe 1 so onde CHM > 2 m; buracos -> classe 0)"
+Write-Host "  (CHM>2 so com LiDAR; gaps mantem classe 1)"

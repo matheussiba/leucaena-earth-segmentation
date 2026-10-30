@@ -1,10 +1,10 @@
-﻿# Etapa 3 - predicao da cena inteira (janela deslizante + overlaps).
+﻿# Etapa 3 - predicao (usa MANET_EXP_NAME do .env).
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 . .\_load_aoi.ps1
 
-$WEIGHTS  = Join-Path $AOI_HOST "experiments\manet-latefusion-multitask\models\weights"
-$OUT_HOST = Join-Path $AOI_HOST "experiments\manet-latefusion-multitask\prediction"
+$WEIGHTS  = Join-Path $AOI_HOST "experiments\$MANET_EXP_NAME\models\weights"
+$OUT_HOST = Join-Path $AOI_HOST "experiments\$MANET_EXP_NAME\prediction"
 New-Item -ItemType Directory -Force -Path $OUT_HOST | Out-Null
 
 $ckptLeaf = $null
@@ -15,10 +15,10 @@ if (-not $ckptLeaf) { throw "Checkpoint nao encontrado em $WEIGHTS. Rode run_02_
 
 $IMG  = "/data/aoi/opt/rgbnir/SF-23-Y-A-IV-4-SO-A.tif"
 $CHM  = "/data/aoi/lidar/rasters/SF-23-Y-A-IV-4-SO-A.tif"
-$CKPT = "/data/aoi/experiments/manet-latefusion-multitask/models/weights/$ckptLeaf"
-$OUT  = "/data/aoi/experiments/manet-latefusion-multitask/prediction"
+$CKPT = "/data/aoi/experiments/$MANET_EXP_NAME/models/weights/$ckptLeaf"
+$OUT  = "/data/aoi/experiments/$MANET_EXP_NAME/prediction"
 
-Write-Host "Predizendo com: $ckptLeaf"
+Write-Host "Predizendo exp=$MANET_EXP_NAME com: $ckptLeaf"
 
 docker compose run --rm manet-latefusion-multitask python scripts/manet-latefusion-multitask/03_predict.py `
   --image_path $IMG `
@@ -26,9 +26,8 @@ docker compose run --rm manet-latefusion-multitask python scripts/manet-latefusi
   --checkpoint $CKPT `
   --out_dir $OUT `
   --output_crs EPSG:31983 `
-  --batch_size 16 `
+  --batch_size 8 `
   --overlaps 0.3 0.5 0.7
 
 Write-Host ""
 Write-Host "Saidas em: $OUT_HOST"
-Write-Host "  pred_class.tif | pred_prob.tif | pred_dist.tif"

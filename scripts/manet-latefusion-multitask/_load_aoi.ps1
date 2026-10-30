@@ -1,4 +1,4 @@
-﻿# Load DIR_DATASETS_AI_PATH + LEUCAENA_DATASET_ID (+ optional TRAIN_PROFILE)
+﻿# Load DIR_DATASETS_AI_PATH + LEUCAENA_DATASET_ID (+ TRAIN_PROFILE, MANET_EXP_NAME)
 # from repo-root .env. Each PC has its own .env (gitignored).
 $ErrorActionPreference = "Stop"
 
@@ -32,7 +32,7 @@ if (-not (Test-Path $AOI_HOST)) {
     throw "AOI not found: $AOI_HOST. Check DIR_DATASETS_AI_PATH and LEUCAENA_DATASET_ID in $envFile"
 }
 
-# home = PC pessoal (menos GPU/RAM); lab = laboratorio (RTX 5080 etc.)
+# home = PC pessoal; lab = laboratorio
 $TRAIN_PROFILE = "home"
 if ($vars.ContainsKey("TRAIN_PROFILE") -and -not [string]::IsNullOrWhiteSpace($vars["TRAIN_PROFILE"])) {
     $TRAIN_PROFILE = $vars["TRAIN_PROFILE"].Trim().ToLowerInvariant()
@@ -41,7 +41,13 @@ if ($TRAIN_PROFILE -notin @("home", "lab")) {
     throw "TRAIN_PROFILE must be 'home' or 'lab' (got '$TRAIN_PROFILE' in $envFile)."
 }
 
-# Docker Compose substitutes these from the process environment.
+# v1 = manet-latefusion-multitask (treino antigo, nao apagar)
+# v2 = manet-latefusion-multitask-v2 (patch 512 + filtro CHM so com LiDAR)
+$MANET_EXP_NAME = "manet-latefusion-multitask-v2"
+if ($vars.ContainsKey("MANET_EXP_NAME") -and -not [string]::IsNullOrWhiteSpace($vars["MANET_EXP_NAME"])) {
+    $MANET_EXP_NAME = $vars["MANET_EXP_NAME"].Trim()
+}
+
 $env:AOI_HOST = ($AOI_HOST -replace '\\', '/')
 if ($TRAIN_PROFILE -eq "lab") {
     $env:DOCKER_SHM_SIZE = "16gb"
@@ -50,4 +56,5 @@ if ($TRAIN_PROFILE -eq "lab") {
 }
 
 Write-Host "AOI: $AOI_HOST"
+Write-Host "MANET_EXP_NAME: $MANET_EXP_NAME"
 Write-Host "TRAIN_PROFILE: $TRAIN_PROFILE (shm=$($env:DOCKER_SHM_SIZE))"

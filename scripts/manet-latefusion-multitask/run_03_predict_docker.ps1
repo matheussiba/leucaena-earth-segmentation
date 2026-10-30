@@ -1,4 +1,4 @@
-# Etapa 3 - predicao da cena inteira (janela deslizante + overlaps).
+﻿# Etapa 3 - predicao da cena inteira (janela deslizante + overlaps).
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 . .\_load_aoi.ps1

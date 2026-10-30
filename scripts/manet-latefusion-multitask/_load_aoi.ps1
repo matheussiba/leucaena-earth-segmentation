@@ -1,11 +1,11 @@
-# Le DIR_DATASETS_AI_PATH + LEUCAENA_DATASET_ID do .env na RAIZ do repo.
-# Cada PC tem o seu .env (gitignored); o .env.example vai no git.
+﻿# Load DIR_DATASETS_AI_PATH + LEUCAENA_DATASET_ID from repo-root .env
+# Each PC has its own .env (gitignored); .env.example is in git.
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $envFile = Join-Path $repoRoot ".env"
 if (-not (Test-Path $envFile)) {
-    throw "Falta $envFile — copie .env.example para .env e defina DIR_DATASETS_AI_PATH e LEUCAENA_DATASET_ID."
+    throw "Missing $envFile - copy .env.example to .env and set DIR_DATASETS_AI_PATH and LEUCAENA_DATASET_ID."
 }
 
 $vars = @{}
@@ -18,10 +18,10 @@ Get-Content $envFile | ForEach-Object {
 }
 
 if (-not $vars.ContainsKey("DIR_DATASETS_AI_PATH") -or [string]::IsNullOrWhiteSpace($vars["DIR_DATASETS_AI_PATH"])) {
-    throw "DIR_DATASETS_AI_PATH nao definido em $envFile (ex.: C:/00_DATASETS_AI ou E:/dados-msb/00_DATASETS_AI)."
+    throw "DIR_DATASETS_AI_PATH not set in $envFile (e.g. C:/00_DATASETS_AI or E:/dados-msb/00_DATASETS_AI)."
 }
 if (-not $vars.ContainsKey("LEUCAENA_DATASET_ID") -or [string]::IsNullOrWhiteSpace($vars["LEUCAENA_DATASET_ID"])) {
-    throw "LEUCAENA_DATASET_ID nao definido em $envFile (ex.: 261002-riodaspedras-aoi)."
+    throw "LEUCAENA_DATASET_ID not set in $envFile (e.g. 261002-riodaspedras-aoi)."
 }
 
 $base = ($vars["DIR_DATASETS_AI_PATH"] -replace '/', '\').TrimEnd('\')
@@ -29,9 +29,9 @@ $id = $vars["LEUCAENA_DATASET_ID"].Trim()
 $AOI_HOST = Join-Path $base $id
 
 if (-not (Test-Path $AOI_HOST)) {
-    throw "AOI nao existe: $AOI_HOST`nConfira DIR_DATASETS_AI_PATH e LEUCAENA_DATASET_ID em $envFile"
+    throw "AOI not found: $AOI_HOST. Check DIR_DATASETS_AI_PATH and LEUCAENA_DATASET_ID in $envFile"
 }
 
-# Docker Compose substitui ${AOI_HOST} a partir do ambiente do processo.
+# Docker Compose substitutes ${AOI_HOST} from the process environment.
 $env:AOI_HOST = ($AOI_HOST -replace '\\', '/')
 Write-Host "AOI: $AOI_HOST"

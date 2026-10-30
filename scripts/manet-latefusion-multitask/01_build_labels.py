@@ -398,7 +398,7 @@ if __name__ == "__main__":
                         'e saem do mapa de distancia.')
     p.add_argument('--chm_band', type=int, default=1,
                    help='Banda do CHM no raster (1 = primeira).')
-    p.add_argument('--chm_min_m', type=float, default=3.0,
+    p.add_argument('--chm_min_m', type=float, default=2.0,
                    help='Altura minima (m) para manter leucaena / distancia.')
     p.add_argument('--chm_filter_class', type=int, default=1,
                    help='Classe no raster de rotulos a filtrar pelo CHM (1=leucaena).')

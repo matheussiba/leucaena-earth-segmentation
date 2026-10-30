@@ -12,7 +12,7 @@ python .\01_build_labels.py `
   --shp_path  "$AOI\annotations\261030-classes.gpkg" `
   --chm_path  "$AOI\lidar\rasters\SF-23-Y-A-IV-4-SO-A.tif" `
   --chm_band 1 `
-  --chm_min_m 3 `
+  --chm_min_m 2 `
   --chm_filter_class 1 `
   --out_base_dir $OUT `
   --train_ratio 0.8 `
@@ -30,4 +30,4 @@ Write-Host "Pronto. Veja: $OUT"
 Write-Host "  ITCs_classes_report.txt"
 Write-Host "  ITCs_labels_train.tif / ITCs_labels_test.tif"
 Write-Host "  ITCs_distance_train.tif / ITCs_distance_test.tif"
-Write-Host "  (classe 1 so onde CHM > 3 m; buracos -> classe 0)"
+Write-Host "  (classe 1 so onde CHM > 2 m; buracos -> classe 0)"

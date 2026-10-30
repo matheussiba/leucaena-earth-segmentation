@@ -22,7 +22,7 @@ $MDIR = "/data/aoi/experiments/manet-latefusion-multitask/models"
 
 Write-Host "Subindo container e iniciando treino..."
 Write-Host "  arch=manet | multitask | latefusion | channels=4 | lidar_channels=2"
-Write-Host "  patch_size=256 (~64 m @ 0.25 m) | num_classes=6 | ignore fundo"
+Write-Host "  patch_size=256 | batch=14 | workers=8 | num_classes=6 | lab RTX 5080"
 
 docker compose run --rm manet-latefusion-multitask python scripts/manet-latefusion-multitask/02_train.py `
   --on_the_fly True `
@@ -50,7 +50,7 @@ docker compose run --rm manet-latefusion-multitask python scripts/manet-latefusi
   --rgb_resolution 0.25 `
   --chm_resolution 0.25 `
   --patch_size 256 `
-  --batch_size 8 `
+  --batch_size 14 `
   --samples 10000 `
   --val_samples 2000 `
   --val_fraction 0.2 `
@@ -59,7 +59,8 @@ docker compose run --rm manet-latefusion-multitask python scripts/manet-latefusi
   --epochs 50 `
   --lr 1e-4 `
   --amp `
-  --num_workers 2 `
+  --num_workers 8 `
+  --prefetch_factor 6 `
   --cudnn_benchmark True `
   --resume False `
   --w_reg 1.5 `

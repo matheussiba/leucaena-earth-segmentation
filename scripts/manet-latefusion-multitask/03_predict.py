@@ -1,5 +1,6 @@
 """
-Inference Script — Mangrove Species Mapping
+Inference Script — Purestand Mapping
+# Homogeneous pure-species stand clusters (macicos)
 ============================================
 Produz dois rasters georreferenciados a partir de uma imagem grande:
   • pred_class.tif   — mapa de classes (Byte)
@@ -1967,7 +1968,8 @@ if __name__ == '__main__':
     args = get_args()
 
     print("=" * 60)
-    print("Mangrove Species Mapping — Predição multi-overlap")
+    print("Purestand Mapping — multi-overlap prediction")
+    print("(homogeneous pure-species stand clusters)")
     print("=" * 60)
     print("  Parâmetros de arquitetura serão extraídos do checkpoint.")
     print(f"  image_path : {args.image_path}")

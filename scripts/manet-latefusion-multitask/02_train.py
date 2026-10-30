@@ -1,5 +1,6 @@
 """
-Multitask Training Script for Mangrove Species Mapping
+Multitask Training Script for Purestand Mapping
+# Homogeneous pure-species stand clusters (macicos)
 =======================================================
 Tasks:
   1. CHM Regression  (dist head)   → predicts canopy height from 'dist' folder
@@ -3709,7 +3710,8 @@ if __name__ == '__main__':
     args = _resolve_task(args)
 
     print("=" * 60)
-    print(f"Mangrove Species Mapping – {args.task.capitalize()} Training")
+    print(f"Purestand Mapping – {args.task.capitalize()} Training")
+    print("(homogeneous pure-species stand clusters)")
     print("=" * 60)
     print(f"  >>> TASK: {args.task.upper()} <<<")
     for k, v in vars(args).items():

@@ -1,5 +1,5 @@
 ﻿# Etapa 2 - treino multitask + late fusion (MANet) via Docker/GPU.
-# Requer: Docker Desktop ligado + imagem leucaena-segmentation:cuda ja buildada.
+# Perfil vem do .env da raiz: TRAIN_PROFILE=home|lab
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 . .\_load_aoi.ps1
@@ -20,9 +20,21 @@ $REF  = "/data/aoi/experiments/manet-latefusion-multitask/masks/ITCs_labels_trai
 $DIST = "/data/aoi/experiments/manet-latefusion-multitask/masks/ITCs_distance_train.tif"
 $MDIR = "/data/aoi/experiments/manet-latefusion-multitask/models"
 
+# Perfis de hardware (mesmo script; so muda batch/workers)
+if ($TRAIN_PROFILE -eq "lab") {
+    $batchSize = 14
+    $numWorkers = 8
+    $prefetch = 6
+} else {
+    # home - PC menos potente
+    $batchSize = 8
+    $numWorkers = 2
+    $prefetch = 4
+}
+
 Write-Host "Subindo container e iniciando treino..."
 Write-Host "  arch=manet | multitask | latefusion | channels=4 | lidar_channels=2"
-Write-Host "  patch_size=256 | batch=14 | workers=8 | num_classes=6 | lab RTX 5080"
+Write-Host "  profile=$TRAIN_PROFILE | patch=256 | batch=$batchSize | workers=$numWorkers | prefetch=$prefetch"
 
 docker compose run --rm manet-latefusion-multitask python scripts/manet-latefusion-multitask/02_train.py `
   --on_the_fly True `
@@ -50,7 +62,7 @@ docker compose run --rm manet-latefusion-multitask python scripts/manet-latefusi
   --rgb_resolution 0.25 `
   --chm_resolution 0.25 `
   --patch_size 256 `
-  --batch_size 14 `
+  --batch_size $batchSize `
   --samples 10000 `
   --val_samples 2000 `
   --val_fraction 0.2 `
@@ -59,8 +71,8 @@ docker compose run --rm manet-latefusion-multitask python scripts/manet-latefusi
   --epochs 50 `
   --lr 1e-4 `
   --amp `
-  --num_workers 8 `
-  --prefetch_factor 6 `
+  --num_workers $numWorkers `
+  --prefetch_factor $prefetch `
   --cudnn_benchmark True `
   --resume False `
   --w_reg 1.5 `

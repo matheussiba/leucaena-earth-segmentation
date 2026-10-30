@@ -1,5 +1,5 @@
-﻿# Load DIR_DATASETS_AI_PATH + LEUCAENA_DATASET_ID from repo-root .env
-# Each PC has its own .env (gitignored); .env.example is in git.
+﻿# Load DIR_DATASETS_AI_PATH + LEUCAENA_DATASET_ID (+ optional TRAIN_PROFILE)
+# from repo-root .env. Each PC has its own .env (gitignored).
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -32,6 +32,22 @@ if (-not (Test-Path $AOI_HOST)) {
     throw "AOI not found: $AOI_HOST. Check DIR_DATASETS_AI_PATH and LEUCAENA_DATASET_ID in $envFile"
 }
 
-# Docker Compose substitutes ${AOI_HOST} from the process environment.
+# home = PC pessoal (menos GPU/RAM); lab = laboratorio (RTX 5080 etc.)
+$TRAIN_PROFILE = "home"
+if ($vars.ContainsKey("TRAIN_PROFILE") -and -not [string]::IsNullOrWhiteSpace($vars["TRAIN_PROFILE"])) {
+    $TRAIN_PROFILE = $vars["TRAIN_PROFILE"].Trim().ToLowerInvariant()
+}
+if ($TRAIN_PROFILE -notin @("home", "lab")) {
+    throw "TRAIN_PROFILE must be 'home' or 'lab' (got '$TRAIN_PROFILE' in $envFile)."
+}
+
+# Docker Compose substitutes these from the process environment.
 $env:AOI_HOST = ($AOI_HOST -replace '\\', '/')
+if ($TRAIN_PROFILE -eq "lab") {
+    $env:DOCKER_SHM_SIZE = "16gb"
+} else {
+    $env:DOCKER_SHM_SIZE = "8gb"
+}
+
 Write-Host "AOI: $AOI_HOST"
+Write-Host "TRAIN_PROFILE: $TRAIN_PROFILE (shm=$($env:DOCKER_SHM_SIZE))"

@@ -11,10 +11,16 @@ No `.env` da **raiz do repo** (gitignored; cada maquina tem o seu):
 ```env
 DIR_DATASETS_AI_PATH=E:/dados-msb/00_DATASETS_AI
 LEUCAENA_DATASET_ID=261002-riodaspedras-aoi
+TRAIN_PROFILE=lab
 ```
 
-Casa tipica: `DIR_DATASETS_AI_PATH=C:/00_DATASETS_AI`.  
-O `LEUCAENA_DATASET_ID` escolhe a pasta da AOI. O git sincroniza os scripts; o `.env` local nao vai no git.
+| `TRAIN_PROFILE` | batch | workers | shm |
+|-----------------|-------|---------|-----|
+| `home` | 8 | 2 | 8gb |
+| `lab` | 14 | 8 | 16gb |
+
+Casa tipica: `DIR_DATASETS_AI_PATH=C:/00_DATASETS_AI` + `TRAIN_PROFILE=home`.  
+O git sincroniza os scripts; o `.env` local nao vai no git.
 
 Veja `.env.example` na raiz.
 

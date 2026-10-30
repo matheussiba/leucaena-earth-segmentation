@@ -1,8 +1,9 @@
 ﻿# Etapa 1 - rasteriza poligonos multiclasse + mapa de pertinencia (macico) da leucaena.
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
+. .\_load_aoi.ps1
+$AOI = $AOI_HOST
 
-$AOI = "C:\00_DATASETS_AI\261002-riodaspedras-aoi"
 $OUT = Join-Path $AOI "experiments\manet-latefusion-multitask\masks"
 New-Item -ItemType Directory -Force -Path $OUT | Out-Null
 

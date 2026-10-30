@@ -1,9 +1,9 @@
-﻿# Etapa 2 — treino multitask + late fusion (MANet) via Docker/GPU.
-# Requer: Docker Desktop ligado + imagem leucaena-segmentation:cuda já buildada.
+﻿# Etapa 2 - treino multitask + late fusion (MANet) via Docker/GPU.
+# Requer: Docker Desktop ligado + imagem leucaena-segmentation:cuda ja buildada.
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
+. .\_load_aoi.ps1
 
-$AOI_HOST = "C:\00_DATASETS_AI\261002-riodaspedras-aoi"
 $EXP_HOST = Join-Path $AOI_HOST "experiments\manet-latefusion-multitask"
 $MASKS_HOST = Join-Path $EXP_HOST "masks"
 $MODEL_HOST = Join-Path $EXP_HOST "models"

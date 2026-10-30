@@ -1,9 +1,8 @@
-# Etapa 3 — predição da cena inteira (janela deslizante + overlaps).
-# Arquitetura/normalização/n_classes vêm do checkpoint (salvo no treino).
+# Etapa 3 - predicao da cena inteira (janela deslizante + overlaps).
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
+. .\_load_aoi.ps1
 
-$AOI_HOST = "C:\00_DATASETS_AI\261002-riodaspedras-aoi"
 $WEIGHTS  = Join-Path $AOI_HOST "experiments\manet-latefusion-multitask\models\weights"
 $OUT_HOST = Join-Path $AOI_HOST "experiments\manet-latefusion-multitask\prediction"
 New-Item -ItemType Directory -Force -Path $OUT_HOST | Out-Null

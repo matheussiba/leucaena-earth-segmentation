@@ -306,11 +306,12 @@ if __name__ == "__main__":
                                             "e mapas de distância (treino/teste).")
     # Defaults adaptados para Rio das Pedras (leucaena). Scripts originais do
     # professor apontavam para CBERS/Marajó; aqui a grade vem do RGBNIR 0.25 m.
-    p.add_argument('--img_path', default=r"C:\00_DATASETS_AI\261002-riodaspedras-aoi\opt\rgbnir\SF-23-Y-A-IV-4-SO-A.tif",
+    # Defaults vazios: use run_01_build_labels.ps1 (le DIR_DATASETS_AI_PATH do .env).
+    p.add_argument('--img_path', default="",
                    help='Imagem de referência (grade de saída).')
-    p.add_argument('--shp_path', default=r"C:\00_DATASETS_AI\261002-riodaspedras-aoi\annotations\261030-classes.gpkg",
+    p.add_argument('--shp_path', default="",
                    help='Polígonos rotulados (campo DN = classe).')
-    p.add_argument('--out_base_dir', default=r"C:\00_DATASETS_AI\261002-riodaspedras-aoi\experiments\manet-latefusion-multitask\masks")
+    p.add_argument('--out_base_dir', default="")
     p.add_argument('--train_ratio', type=float, default=0.8,
                    help='Fração dos polígonos (por classe) no treino; o resto vai p/ teste.')
     p.add_argument('--apply_gaussian', type=_as_bool, default=True,

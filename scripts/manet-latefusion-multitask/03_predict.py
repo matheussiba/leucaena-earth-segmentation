@@ -1850,7 +1850,7 @@ def predict(args):
 
 def get_args():
     p = argparse.ArgumentParser(
-        description='Predição multi-overlap para mapeamento de espécies de mangue')
+        description='Purestand Mapping — multi-overlap prediction for homogeneous pure-species stands')
 
     # ── ESSENCIAIS: o que você realmente precisa informar ─────
     p.add_argument('--image_path', type=str, required=False,

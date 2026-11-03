@@ -1,0 +1,34 @@
+# run.yaml - registry de um run de TREINO. Gerado/atualizado por run.py.
+# Pasta: experiments/<rede>/<nome>/<run>/run.yaml
+# Regra: run-00N so incrementa quando ha TREINO novo. Predicao em outra AOI
+# fica NO MESMO run (subpasta predictions/<aoi>) e vira um item em predictions:.
+
+run: run-002
+parent_run: run-001                        # de onde veio (finetune); vazio se do zero
+init_from: run-001/models/best_model.pth   # pesos iniciais (finetune); vazio se do zero
+experiment: latefusion-multitask           # pasta = experiments/<network>/<experiment>
+network: manet
+profile: lab                               # home | lab (hardware de referencia)
+aoi_train: 261002-riodaspedras
+dataset_id: 261002-riodaspedras__lbl-v2
+tiles_train: []                            # tiles resolvidos do aoi.gpkg
+git_sha: ""                                # auto (se disponivel)
+hyperparams: {arch: manet, fusion: concat, patch: 512, epochs: 60, lr: 1.0e-4}
+timestamps:
+  run_started: 2026-11-02T18:00:00
+  build_labels: {started: "", finished: ""}   # proc 1
+  train:        {started: "", finished: ""}    # proc 2
+  predict:      {started: "", finished: ""}    # proc 3
+  postprocess:  {started: "", finished: ""}    # proc 4
+metrics_train: {leucaena_f1: 0.0, iou: 0.0, best_val: 0.0}
+changes: "o que mudou deste run para o anterior (ex.: filtro CHM>2, lbl-v2)"
+status: done
+predictions:                               # cada aplicacao dos pesos deste run
+  - aoi: 261002-riodaspedras
+    profile: home
+    at: 2026-11-02T20:10:00
+    metrics: {leucaena_f1: 0.0}
+  - aoi: 260515-piracicaba
+    profile: lab
+    at: 2026-11-03T09:00:00
+    metrics: {leucaena_f1: 0.0}

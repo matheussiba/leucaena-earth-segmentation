@@ -1,0 +1,17 @@
+# dataset.yaml - descreve um conjunto derivado reutilizavel: datasets/<id>/
+# id = <aoi>__lbl-v<N>  (e __p<size> se save_patches:true). Gerado pelo proc 1.
+# Serve para varias redes/runs reusarem os mesmos rotulos sem reconstruir.
+
+dataset_id: 261002-riodaspedras__lbl-v1
+aoi: 261002-riodaspedras
+label_version: 1
+annotations_source: annotations/261030-classes.gpkg
+contem:
+  masks: true                  # sempre (ITCs_labels/distance_train|test.tif)
+  patches: false               # so se save_patches:true no experiment.yaml
+resolve:
+  rgbnir_vrt: _resolve/aoi_rgbnir.vrt
+  lidar_vrt: _resolve/aoi_lidar.vrt
+  annotations_clip: _resolve/aoi_annotations.gpkg
+tiles: []                      # preenchido pelo resolve (resolve.json)
+observacoes: "lbl-v1 = baseline; lbl-v2 = filtro CHM>2 so onde ha LiDAR, etc."

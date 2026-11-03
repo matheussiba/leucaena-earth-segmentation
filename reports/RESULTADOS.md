@@ -40,11 +40,11 @@ perder muita revocação.
 | Sensor óptico | IGC-SP, 4 bandas (B, G, R, NIR), ~25 cm/pixel |
 | LiDAR | CHM (altura de copa) + intensidade, rasterizado a 1 m e reamostrado p/ a grade óptica |
 | Anotações | Polígonos de leucaena coletados na plataforma [leucaena.earth](https://leucaena.earth) |
-| Tiles usados | [PREENCHER — ex.: 17 tiles SF-23-Y-A-IV-2-\*] |
+| Tiles usados | 0 tile(s):  |
 | Tamanho do patch | 256 × 256 px |
 | Overlap entre patches | 60% |
-| Total de patches | **[PREENCHER]** (ex.: 9.341) |
-| Split train / val / test | **[PREENCHER]** / [PREENCHER] / [PREENCHER] |
+| Total de patches | **10.213** |
+| Split train / val / test | **9.165** / 689 / 359 |
 
 > 💡 Os números de patches e splits estão em `/data/patches/preparation.txt` e no
 > rodapé do `manifest.csv`. O log de preparação também mostra, por tile, quantos
@@ -103,9 +103,9 @@ e a altura (CHM) ao mesmo tempo.
 
 | Classe | Precision | Recall | F1 | IoU | Suporte (px) |
 |--------|----------:|-------:|---:|----:|-------------:|
-| background | [PREENCHER] | [PREENCHER] | [PREENCHER] | [PREENCHER] | [PREENCHER] |
-| **leucaena** | [PREENCHER] | [PREENCHER] | [PREENCHER] | [PREENCHER] | [PREENCHER] |
-| *macro F1* | | | [PREENCHER] | | |
+| background | 0.9940 | 0.9816 | 0.9878 | 0.9758 | 12.085.841 |
+| **leucaena** | 0.9294 | 0.9759 | 0.9521 | 0.9085 | 2.990.917 |
+| *macro F1* | | | 0.9699 | | |
 
 > 💡 Tudo sai de `python eval-patches.py -e 4 --split test`
 > (relatório salvo em `experiments/exp_4/logs/eval_patches_test.txt`).
@@ -115,8 +115,8 @@ e a altura (CHM) ao mesmo tempo.
 
 |  | Predito: background | Predito: leucaena |
 |---|---|---|
-| **Real: background** | TN = [PREENCHER] | FP = [PREENCHER] |
-| **Real: leucaena** | FN = [PREENCHER] | TP = [PREENCHER] |
+| **Real: background** | TN = 11.863.954 | FP = 221.887 |
+| **Real: leucaena** | FN = 72.063 | TP = 2.918.854 |
 
 > 💡 Sai no mesmo relatório do `eval-patches.py`. FP = falso positivo, FN = leucaena perdida.
 

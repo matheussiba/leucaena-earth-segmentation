@@ -113,32 +113,42 @@ def find_reference_tile(stem: str, tiles_dir: str, exts=(".tif", ".tiff")) -> Op
     return None
 
 
-def build_pdal_pipeline(
+def build_single_writer_pipeline(
     laz_path: str,
-    dsm_path: str,
-    dtm_path: str,
-    intensity_path: str,
+    out_path: str,
+    product: str,
     resolution_m: float,
     target_epsg: Optional[int],
     bounds: Optional[tuple[float, float, float, float]],
+    in_srs: Optional[int] = None,
 ) -> dict:
-    """Build a PDAL pipeline (Python dict) that writes DSM, DTM and Intensity.
+    """Build a PDAL pipeline that rasterises ONE product to ``out_path``.
 
-    The pipeline reads the LAZ once and fans out into three writers via
-    PDAL tags. ``bounds`` is ``(xmin, xmax, ymin, ymax)`` in ``target_epsg``;
-    when provided, the output rasters cover *exactly* that extent, which
-    makes the later GDAL Warp step trivial.
+    ``product`` is one of ``"dsm"`` (max Z of clean returns), ``"dtm"`` (min Z
+    of clean returns — no SMRF; memory-safe for ~90 M-point IGC tiles) or
+    ``"intensity"`` (mean raw Intensity). We use one writer per pipeline on
+    purpose: the pdal-python ``Pipeline`` does not reliably flush *multiple*
+    ``writers.gdal`` leaves in a single DAG. ``bounds`` is
+    ``(xmin, xmax, ymin, ymax)`` in ``target_epsg``. ``in_srs`` (EPSG) is set
+    as ``readers.las`` default_srs for LAZ files without an embedded CRS.
     """
-    stages: list = [
-        {
-            "type": "readers.las",
-            "filename": laz_path,
-            "tag": "src_raw",
-        },
-    ]
-    # Reproject if the caller wants a specific CRS for the output rasters.
+    if product not in ("dsm", "dtm", "intensity"):
+        raise ValueError(f"Unknown product: {product!r}")
+
+    reader: dict = {"type": "readers.las", "filename": laz_path, "tag": "src_raw"}
+    if in_srs is not None:
+        reader["default_srs"] = f"EPSG:{in_srs}"
+    stages: list = [reader]
     last_tag = "src_raw"
-    if target_epsg is not None:
+
+    # Reproject ONLY when the LAZ CRS differs from the target. Same-EPSG
+    # "reprojection" still materialises a full second copy of ~90 M points and
+    # was a major contributor to WSL segfaults on IGC tiles.
+    need_reproj = (
+        target_epsg is not None
+        and (in_srs is None or int(in_srs) != int(target_epsg))
+    )
+    if need_reproj:
         stages.append({
             "type": "filters.reprojection",
             "inputs": last_tag,
@@ -155,59 +165,41 @@ def build_pdal_pipeline(
         "tag": "src_clean",
     })
 
-    # SMRF gives us a ground/non-ground classification suitable for CHM.
-    stages.append({
-        "type": "filters.smrf",
-        "inputs": "src_clean",
-        "tag": "src_smrf",
-    })
+    writer_input = "src_clean"
+    output_type = "max"
+    dimension: Optional[str] = None
 
-    # Branch 1: ground-only for the DTM (min Z over class 2).
-    stages.append({
-        "type": "filters.range",
-        "inputs": "src_smrf",
-        "limits": "Classification[2:2]",
-        "tag": "ground",
-    })
+    if product == "intensity":
+        output_type = "mean"
+        dimension = "Intensity"
+    elif product == "dtm":
+        # NO SMRF. filters.smrf loads ~90 M points into RAM and segfaults WSL
+        # even after thinning (thinning still requires the full load first).
+        # For the canopy-height gate (CHM = DSM - DTM, threshold ~3 m) a
+        # cell-wise MIN of clean returns is enough and memory-safe: same
+        # pipeline shape as DSM, just output_type=min. IGC tiles also have
+        # broken ReturnNumber=0, so we avoid filters.returns here too.
+        writer_input = "src_clean"
+        output_type = "min"
 
-    gdal_common = {
+    writer: dict = {
+        "type": "writers.gdal",
+        "inputs": writer_input,
+        "filename": out_path,
         "gdaldriver": "GTiff",
         "gdalopts": "COMPRESS=DEFLATE,TILED=YES,BIGTIFF=IF_SAFER",
         "data_type": "float32",
         "nodata": -9999.0,
         "resolution": float(resolution_m),
-        # Bigger radius helps fill no-data pixels in sparse areas; tweakable.
         "radius": float(resolution_m) * 1.5,
+        "output_type": output_type,
     }
+    if dimension is not None:
+        writer["dimension"] = dimension
     if bounds is not None:
         xmin, xmax, ymin, ymax = bounds
-        # PDAL bounds syntax: ([xmin,xmax],[ymin,ymax])
-        gdal_common["bounds"] = f"([{xmin},{xmax}],[{ymin},{ymax}])"
-
-    stages.append({
-        **gdal_common,
-        "type": "writers.gdal",
-        "inputs": "ground",
-        "filename": dtm_path,
-        "output_type": "min",
-    })
-
-    stages.append({
-        **gdal_common,
-        "type": "writers.gdal",
-        "inputs": "src_clean",
-        "filename": dsm_path,
-        "output_type": "max",
-    })
-
-    stages.append({
-        **gdal_common,
-        "type": "writers.gdal",
-        "inputs": "src_clean",
-        "filename": intensity_path,
-        "output_type": "mean",
-        "dimension": "Intensity",
-    })
+        writer["bounds"] = f"([{xmin},{xmax}],[{ymin},{ymax}])"
+    stages.append(writer)
 
     return {"pipeline": stages}
 
@@ -224,7 +216,10 @@ def run_pdal_pipeline(pipeline: dict) -> int:
         ) from exc
 
     p = pdal.Pipeline(json.dumps(pipeline))
-    p.validate()
+    # PDAL >= 2.x Python bindings removed Pipeline.validate(); execute() validates
+    # internally. Keep the call only when the installed binding still exposes it.
+    if hasattr(p, "validate"):
+        p.validate()
     n_points = p.execute()
     return int(n_points)
 
@@ -365,6 +360,7 @@ def process_laz_to_lidar_tif(
     resolution_m: float = general.LIDAR_RASTER_RESOLUTION_M,
     chm_max_m: float = general.LIDAR_CHM_MAX_M,
     tmpdir: Optional[str] = None,
+    in_srs: Optional[int] = None,
 ) -> dict:
     """End-to-end LAZ -> 2-band LiDAR GeoTIFF.
 
@@ -398,16 +394,30 @@ def process_laz_to_lidar_tif(
             )
             target_epsg = reference_grid.epsg_code
 
-        pipeline = build_pdal_pipeline(
-            laz_path=laz_path,
-            dsm_path=dsm_tmp,
-            dtm_path=dtm_tmp,
-            intensity_path=inten_tmp,
-            resolution_m=resolution_m,
-            target_epsg=target_epsg,
-            bounds=bounds,
-        )
-        n_points = run_pdal_pipeline(pipeline)
+        # If the LAZ has no embedded CRS, assume it matches the caller-provided
+        # ``in_srs`` or, failing that, the reference grid's CRS (IGC-SP LiDAR
+        # ships in the same SIRGAS 2000 / UTM 23S grid as the orthophotos).
+        effective_in_srs = in_srs if in_srs is not None else target_epsg
+
+        # One single-writer pipeline per product (see build_single_writer_pipeline).
+        n_points = 0
+        for product, path in (("dsm", dsm_tmp), ("dtm", dtm_tmp), ("intensity", inten_tmp)):
+            pipeline = build_single_writer_pipeline(
+                laz_path=laz_path,
+                out_path=path,
+                product=product,
+                resolution_m=resolution_m,
+                target_epsg=target_epsg,
+                bounds=bounds,
+                in_srs=effective_in_srs,
+            )
+            n = run_pdal_pipeline(pipeline)
+            n_points = max(n_points, int(n))
+            if not os.path.isfile(path):
+                raise RuntimeError(
+                    f"PDAL finished ({n:,} pts) but did not write {product} -> {path}. "
+                    "Check that the LAZ overlaps the reference grid bounds."
+                )
 
         compute_chm(dsm_tmp, dtm_tmp, chm_tmp, chm_max_m=chm_max_m)
 
@@ -478,7 +488,8 @@ def inspect_laz(laz_path: str) -> dict:
         ]
     }
     p = pdal.Pipeline(json.dumps(pipeline))
-    p.validate()
+    if hasattr(p, "validate"):
+        p.validate()
     n_points = p.execute()
     meta = json.loads(p.metadata) if isinstance(p.metadata, str) else p.metadata
     return {

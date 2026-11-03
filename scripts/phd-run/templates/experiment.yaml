@@ -1,0 +1,91 @@
+# experiment.yaml - TODOS os botoes do modelo (iguais para QUALQUER rede).
+# Caminho: experiments/<rede>/<nome>/experiment.yaml   (ref: -experiment <rede>/<nome>)
+# Trocar de rede = mudar `network:`. O que varia por PC fica no .env, nao aqui.
+
+network: manet                 # -> --arch : unet|unetplusplus|manet|linknet|BPATUNet|resunet
+task: multitask                # multitask | classification | regression
+latefusion: true               # 2 bracos (RGBNIR + CHM/LiDAR)
+fusion: concat                 # concat | gated | xattn  (so com latefusion)
+channels: 4                    # bandas opticas (RGBNIR)
+lidar_channels: 2              # CHM + INTENSITY
+num_classes: 6
+bands_opt: [B, G, R, NIR]      # documental
+bands_lidar: [CHM, INTENSITY]  # documental
+
+patch_size: 512
+on_the_fly: true               # padrao; false => usa/gera patches salvos
+save_patches: false            # true => datasets/<id> ganha patches/ e id ganha __p<size>
+epochs: 60
+lr: 1.0e-4
+pretrained: true
+
+rgb_norm_method: minmax        # minmax | constant
+lidar_norm: minmax             # minmax | values
+class_weights: inverse         # none | inverse | median | effective | manual
+reg_loss: l1                   # l1 | mse | smooth_l1
+rgb_resolution: 0.25
+chm_resolution: 0.25
+output_crs: EPSG:31983
+
+# annotations: 261030-classes.gpkg   # opcional; default = unico .gpkg em annotations/
+# nomenc_field: NOMENC_10K            # opcional; default = auto-detecta
+
+# proc 1 (rotulos)
+labels:
+  version: 1                   # dataset_id = <aoi>__lbl-v<version>
+  classes_dist_map: [1]        # classes que entram no mapa de distancia (1=leucaena)
+  dist_map_as_cluster: true
+  cluster_edge_m: 10.0
+  gaussian_sigma: 2
+  chm_min_m: 2.0               # filtra leucaena baixa SO onde ha LiDAR
+  chm_filter_class: 1
+  train_ratio: 0.8
+
+# proc 3 (predicao)
+predict:
+  overlaps: [0.3, 0.5, 0.7]
+  batch_size: 8
+
+# proc 4 (pos-processo do pred_dist.tif)
+post:
+  sigma: 2
+  threshold: 0.5
+  min_size: 500
+  connectivity: 2
+  save_filtered: true
+
+# hardware por PC (TRAIN_PROFILE no .env escolhe)
+profiles:
+  home: {batch: 2, workers: 2, prefetch: 2, shm: 8gb}
+  lab:  {batch: 4, workers: 8, prefetch: 4, shm: 16gb}
+
+# escotilha: flags extras repassadas verbatim ao 02_train.py
+train_extra_args:
+  - --samples
+  - 10000
+  - --val_samples
+  - 2000
+  - --val_fraction
+  - 0.2
+  - --val_block_size
+  - 1024
+  - --oversample
+  - "True"
+  - --save_every
+  - 15
+  - --cudnn_benchmark
+  - "True"
+  - --w_reg
+  - 1.5
+  - --w_seg
+  - 1.0
+  - --reg_include_bg
+  - "False"
+  - --reg_mask_source
+  - label
+  - --learn_task_weights
+  - "True"
+  - --ignore_index
+  - "True"
+  - --ignore_class_value
+  - 0

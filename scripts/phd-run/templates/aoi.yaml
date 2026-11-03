@@ -1,0 +1,12 @@
+# aoi.yaml - metadados OPCIONAIS de um AOI (documentacao; o dado real e o .gpkg).
+# O AOI em si e aois/<aoi>.gpkg: footprints dos tiles com NOMENC_2K/5K/10K.
+# Este arquivo so registra contexto humano; o resolver nao depende dele.
+
+aoi: 261002-riodaspedras
+descricao: "Rio das Pedras - area piloto leucaena"
+gpkg: aois/261002-riodaspedras.gpkg
+nomenc_field: NOMENC_10K        # campo que casa com os nomes do pool
+crs: EPSG:31983
+observacoes: >
+  AOI pequeno (1 tile). LiDAR gerado pelo orquestrador R
+  (scripts/lidar-products). Anotacoes vem do gpkg global filtrado.

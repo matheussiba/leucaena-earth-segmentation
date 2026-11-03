@@ -19,15 +19,16 @@
 8. [PyTorch: Dataset, DataLoader e tensores](#8-pytorch-dataset-dataloader-e-tensores)
 9. [Augmentations](#9-augmentations)
 10. [Arquitetura ResUNet](#10-arquitetura-resunet)
-11. [Fusão optical + LiDAR (experimentos 1, 2, 3)](#11-fus%C3%A3o-optical--lidar-experimentos-1-2-3)
-12. [Loss function, classes e pesos](#12-loss-function-classes-e-pesos)
-13. [Treinamento: optimizer, LR scheduler, early stopping](#13-treinamento-optimizer-lr-scheduler-early-stopping)
-14. [Métricas: F1, precision, recall, IGNORE_INDEX](#14-m%C3%A9tricas-f1-precision-recall-ignore_index)
-15. [Inferência: sliding window, overlap, softmax averaging](#15-infer%C3%AAncia-sliding-window-overlap-softmax-averaging)
-16. [Armazenamento: .npy vs HDF5 vs Zarr](#16-armazenamento-npy-vs-hdf5-vs-zarr)
-17. [Reprojection e SetSpatialFilter](#17-reprojection-e-setspatialfilter)
-18. [Glossário rápido](#18-gloss%C3%A1rio-r%C3%A1pido)
-19. [Leituras sugeridas](#19-leituras-sugeridas)
+11. [O que cada experimento faz (1, 2, 3) — leia isto](#11-o-que-cada-experimento-faz-1-2-3--leia-isto)
+12. [Experimento cena única Rio das Pedras (defensável)](#12-experimento-cena-%C3%BAnica-rio-das-pedras-defens%C3%A1vel)
+13. [Loss function, classes e pesos](#13-loss-function-classes-e-pesos)
+14. [Treinamento: optimizer, LR scheduler, early stopping](#14-treinamento-optimizer-lr-scheduler-early-stopping)
+15. [Métricas: F1, precision, recall, IGNORE_INDEX](#15-m%C3%A9tricas-f1-precision-recall-ignore_index)
+16. [Inferência: sliding window, overlap, softmax averaging](#16-infer%C3%AAncia-sliding-window-overlap-softmax-averaging)
+17. [Armazenamento: .npy vs HDF5 vs Zarr](#17-armazenamento-npy-vs-hdf5-vs-zarr)
+18. [Reprojection e SetSpatialFilter](#18-reprojection-e-setspatialfilter)
+19. [Glossário rápido](#19-gloss%C3%A1rio-r%C3%A1pido)
+20. [Leituras sugeridas](#20-leituras-sugeridas)
 
 ---
 
@@ -580,59 +581,146 @@ Profundidades do encoder no seu repo: `[32, 64, 128, 256]`. Cada número
 
 ---
 
-## 11. Fusão optical + LiDAR (experimentos 1, 2, 3)
+## 11. O que cada experimento faz (1, 2, 3) — leia isto
 
-Quando há duas fontes (foto colorida + altura LiDAR), você pode combinar
-de três jeitos:
+No código, `-e 1`, `-e 2` e `-e 3` **não mudam o dataset**. Mudam só **como
+a rede junta óptico e LiDAR**. Os três resolvem a mesma pergunta:
 
-### Experimento 1 — Sem fusão (só óptico)
+> Para cada pixel do patch: é leucaena (1) ou não (0)?
 
-LiDAR é ignorado. Modelo recebe 4 canais (BGRN).
+Entrada comum nos três (quando há LiDAR nos patches):
 
-Quando usar: você não tem LiDAR alinhado, ou quer um baseline simples.
+| Modalidade | Canais | O que carrega |
+|------------|--------|---------------|
+| Óptico | 4 (B, G, R, NIR) | cor + vegetação |
+| LiDAR | 2 (CHM / TCH, INTENSITY) | altura do dossel + intensidade |
 
-### Experimento 2 — Early fusion (fusão na entrada)
+Saída comum: máscara 256×256 com classes `{0, 1}` (pixels `255` = IGNORE,
+não entram na loss nem nas métricas).
 
-Concatena as bandas óptico + LiDAR antes do primeiro `Conv`:
+Pense assim: **óptico = “parece leucaena?”**, **LiDAR = “é alto o bastante?”**.
+A diferença entre experimentos é **em que momento** essas duas respostas se
+encontram.
 
-```
-input: (B, 4+L, H, W)   ← 4 bandas óticas + L bandas LiDAR juntas
-       |
-   encoder único processa tudo
-```
-
-Simples. A rede aprende sozinha como combinar. Funciona bem quando as
-duas modalidades têm informação **complementar** mas correlacionada.
-
-### Experimento 3 — Late fusion (fusão no final)
-
-Dois encoders separados:
+### Experimento 1 — Só óptico (`-e 1`, `conf/model_1.py`)
 
 ```
-óptico ──> encoder_o ──┐
-                       ├──> concat ──> decoder ──> mask
-LiDAR  ──> encoder_l ──┘
+óptico (4 bandas) ──> ResUNet ──> máscara
+LiDAR                 (ignorado / zeros)
 ```
 
-Cada encoder aprende representações **independentes** da sua modalidade
-e só no final elas se encontram. Mais parâmetros, mais complexo, às
-vezes generaliza melhor quando as modalidades são muito diferentes
-(óptico = textura; LiDAR = geometria 3D).
+- **O que faz:** treina/prediz só com a foto.
+- **Quando usar:** baseline; tiles sem LiDAR; comparar se o LiDAR vale a pena.
+- **Comando típico:** `python train.py -e 1 --patch-source file --manifest ...`
 
-Resumo:
+### Experimento 2 — Early fusion (`-e 2`, `conf/model_2.py`)
 
-| Modalidade   | Variação esperada de F1 (paper Ferrari) |
-|--------------|------------------------------------------|
-| Só óptico    | Bom (referência) |
-| Early fusion | Costuma melhorar em copas pequenas |
-| Late fusion  | Costuma melhorar em separar espécies parecidas |
+```
+óptico (4) ─┐
+            ├── concat → 6 canais → UM encoder/decoder → máscara
+LiDAR (2)  ─┘
+```
 
-Para o seu PhD, o **experimento 1 é o caminho rápido** (você ainda não
-tem LiDAR alinhado a todos os tiles).
+- **O que faz:** cola as bandas **na entrada**. Uma rede só processa tudo.
+- **Intuição:** a primeira convolução já “vê” cor e altura juntos.
+- **Quando usar:** modalidades complementares e alinhadas; menos parâmetros
+  que late fusion.
+- **Comando:** `python train.py -e 2 --patch-source file --manifest ...`
+
+### Experimento 3 — Late fusion (`-e 3`, `conf/model_3.py`) ← o da cena Rio das Pedras
+
+```
+óptico (4) ──> encoder+decoder óptico ──┐
+                                        ├── concat features → classificador → máscara
+LiDAR (2)  ──> encoder+decoder LiDAR ──┘
+```
+
+- **O que faz:** **duas redes** (uma para foto, uma para LiDAR). Cada uma
+  extrai o seu “resumo” (feature maps); só no fim esses vetores/mapas são
+  concatenados e um classificador decide a máscara.
+- **Intuição:** óptico aprende textura/cor; LiDAR aprende geometria; o
+  classificador combina as duas opiniões.
+- **Quando usar:** separar leucaena de outras árvores altas (o LiDAR sozinho
+  não distingue espécie; o óptico sozinho confunde espécies parecidas).
+- **Comando:** `python train.py -e 3 --patch-source file --manifest ...`
+
+### Tabela rápida (para o professor / tese)
+
+| Exp | Nome | Redes | Quando as modalidades se juntam | Precisa LiDAR real? |
+|-----|------|-------|----------------------------------|---------------------|
+| 1 | Optical-only | 1 | — (só foto) | Não |
+| 2 | Early fusion | 1 | Na **entrada** (canais) | Sim |
+| 3 | Late fusion | 2 | No **final** (features) | Sim |
+
+Arquivos: `conf/model_1.py`, `conf/model_2.py`, `conf/model_3.py` →
+`models/resunet.py` (`ResUnetOpt`, early, `LateFusion`).
+
+Logs: `experiments/exp_<N>/logs/train_<N>.txt` e
+`eval_patches_test.txt` (IoU + F1).
 
 ---
 
-## 12. Loss function, classes e pesos
+## 12. Experimento cena única Rio das Pedras (defensável)
+
+Este é o protocolo **diferente** do `prep-patches-from-tiles.py` antigo
+(que fazia split aleatório por patch e vazava pixels entre train/val/test).
+
+### Ideia em uma frase
+
+Treinar e medir **só onde você revisou polígonos**, com **late fusion**,
+**TCH (CHM) > 3 m** na leucaena, e **split por polígono** (sem data leak).
+
+### O que entra
+
+| Dado | Caminho (host) |
+|------|----------------|
+| Óptico RGBN | `.../opt/rgbnir/SF-23-Y-A-IV-4-SO-A.tif` |
+| LAZ (4 quadrantes) | `.../lidar/raw/*.laz` |
+| Polígonos leucaena (verde) | `annotations/leucaena-polygons.geojson` |
+| Polígonos NÃO-leucaena (vermelho) | `annotations/non-leucaena-polygons.geojson` |
+
+### Como o rótulo é feito (por pixel)
+
+| Situação | Label |
+|----------|-------|
+| Fora de qualquer polígono | `255` IGNORE (não mapeamos a cena toda) |
+| Dentro de polígono **não-leucaena** | `0` (hard negative — inclusive outras árvores) |
+| Dentro de polígono **leucaena** e CHM ≥ 3 m | `1` |
+| Dentro de polígono **leucaena** e CHM < 3 m | `255` IGNORE (não forçamos como fundo) |
+
+**TCH = CHM** = altura do dossel (`DSM − DTM`), banda 1 do raster LiDAR.
+
+### Split sem leak
+
+Cada polígono vai **inteiro** para train **ou** val **ou** test (~70/15/15,
+estratificado por classe). Patches de um split só supervisionam polígonos
+daquele split. Assim um pixel anotado nunca aparece em dois splits
+(diferente do split aleatório com overlap 60%).
+
+### Scripts (ordem)
+
+| Passo | Script | Faz o quê |
+|-------|--------|-----------|
+| a | `prep-lidar-scene.py` | 4 LAZ → 1 GeoTIFF `[CHM, INTENSITY]` alinhado ao óptico |
+| b | `prep-scene-polygon-split.py` | rótulos 2 classes + TCH>3m + split por polígono + patches |
+| c | `train.py -e 3 --patch-source file` | treino late fusion |
+| d | `eval-patches.py -e 3 --split test` | IoU + F1 **só dentro dos polígonos** |
+
+### Tempos típicos (WSL + Docker, esta cena)
+
+| Passo | Tempo esperado | Observação |
+|-------|----------------|------------|
+| **a** LiDAR | ~5–15 min | Nesta máquina: **~6 min** (log: 343 s) |
+| **b** patches | ~15–45 min | Cena 27k×19k px; depende de quantos patches passam o filtro |
+| **c** treino | GPU: ~30 min–3 h · CPU: várias horas | Early stop (paciência 15); para quando val estabiliza |
+| **d** eval | ~1–5 min | Só passa o split test uma vez |
+
+Passo **a** desta cena já gerou
+`lidar/rasters/SF-23-Y-A-IV-4-SO-A.tif` (~2 GB, CHM médio ~3.7 m).
+
+---
+
+## 13. Loss function, classes e pesos
 
 ### Cross-entropy
 
@@ -688,7 +776,7 @@ porque eram 10 classes. Para binário, basta um par.
 
 ---
 
-## 13. Treinamento: optimizer, LR scheduler, early stopping
+## 14. Treinamento: optimizer, LR scheduler, early stopping
 
 ### Optimizer
 
@@ -744,7 +832,7 @@ test).
 
 ---
 
-## 14. Métricas: F1, precision, recall, IGNORE_INDEX
+## 15. Métricas: F1, precision, recall, IGNORE_INDEX
 
 ### Matriz de confusão (binária)
 
@@ -796,7 +884,7 @@ Onde A é a máscara prevista e B a real. F1 e IoU andam juntos:
 
 ---
 
-## 15. Inferência: sliding window, overlap, softmax averaging
+## 16. Inferência: sliding window, overlap, softmax averaging
 
 ### Por que não dá para predizer a imagem inteira
 
@@ -862,7 +950,7 @@ Mitigações:
 
 ---
 
-## 16. Armazenamento: .npy vs HDF5 vs Zarr
+## 17. Armazenamento: .npy vs HDF5 vs Zarr
 
 ### Cenário
 
@@ -943,7 +1031,7 @@ Tanto HDF5 quanto Zarr precisam de **chunk** definido. Regra:
 
 ---
 
-## 17. Reprojection e SetSpatialFilter
+## 18. Reprojection e SetSpatialFilter
 
 ### Reprojection (CRS transform)
 
@@ -1000,7 +1088,7 @@ Docker. Se um dia rasterizar “esquisito”, lembre desse switch.
 
 ---
 
-## 18. Glossário rápido
+## 19. Glossário rápido
 
 | Sigla / termo            | Significado |
 |--------------------------|-------------|
@@ -1037,7 +1125,7 @@ Docker. Se um dia rasterizar “esquisito”, lembre desse switch.
 
 ---
 
-## 19. Leituras sugeridas
+## 20. Leituras sugeridas
 
 ### Conceitos básicos
 

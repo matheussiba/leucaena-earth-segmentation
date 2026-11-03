@@ -1,0 +1,16 @@
+# Compose do passo 2 (align) do orquestrador LiDAR.
+# TILES_HOST = PHD_RUN_ROOT/tiles (pool central), injetado por run_lidar_pipeline.ps1.
+services:
+  lidar-align:
+    image: leucaena-segmentation:cuda
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - ${TILES_HOST}:/data/tiles
+    environment:
+      - PROJ_LIB=/opt/conda/share/proj
+      - GDAL_DATA=/opt/conda/share/gdal
+      - GTIFF_SRS_SOURCE=EPSG
+    stdin_open: true
+    tty: true
+    command: bash

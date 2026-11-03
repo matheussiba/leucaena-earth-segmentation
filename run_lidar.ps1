@@ -10,7 +10,9 @@ param(
     [switch]$NoOptical,
     [switch]$NoIntensity,
     [double]$Res = 0.5,
-    [double]$ChmMax = 120
+    [double]$ChmMax = 120,
+    [int]$Workers = 4,
+    [int]$Threads = 12
 )
 $ErrorActionPreference = "Stop"
 & (Join-Path $PSScriptRoot "scripts\lidar-products\run_lidar_pipeline.ps1") @PSBoundParameters

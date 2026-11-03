@@ -21,7 +21,9 @@ param(
     [switch]$NoOptical,
     [switch]$NoIntensity,
     [double]$Res = 0.5,
-    [double]$ChmMax = 120
+    [double]$ChmMax = 120,
+    [int]$Workers = 4,   # LAZ em paralelo (R); threads lidR = Threads/Workers
+    [int]$Threads = 12   # total de threads lidR a repartir entre workers
 )
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
@@ -67,6 +69,7 @@ Write-Host "AOI: $aoi | via $($info.resolved_via)"
 Write-Host "  optical ($($optical.Count)): $($optical -join ', ')"
 Write-Host "  laz     ($($lazStems.Count)): $($lazStems -join ', ')"
 Write-Host "Mode: $Mode | Force=$Force | NoOptical=$NoOptical | NoIntensity=$NoIntensity"
+Write-Host "Workers=$Workers | Threads=$Threads (lidR por worker ~= Threads/Workers)"
 Write-Host "R: $Rbin"
 
 New-Item -ItemType Directory -Force -Path $PROD_HOST, $RAS_HOST | Out-Null
@@ -91,8 +94,10 @@ if ($Mode -eq "products" -or $Mode -eq "all") {
                    "--laz-dir", $LAZ_HOST,
                    "--out-dir", $PROD_HOST,
                    "--names", $lazNamesCsv,
-                   "--res", $Res,
-                   "--chm-max", $ChmMax)
+                   "--res", ("{0}" -f $Res).Replace(",", "."),
+                   "--chm-max", $ChmMax,
+                   "--workers", $Workers,
+                   "--threads", $Threads)
         if ($Force) { $rargs += "--force" }
         Write-Host "`n[PASSO 1 - R] $Rbin $($rargs -join ' ')"
         & $Rbin @rargs

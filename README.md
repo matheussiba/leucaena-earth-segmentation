@@ -5,6 +5,16 @@
 
 Binary semantic segmentation of **Leucaena leucocephala** (leucaena) tree canopy using aerial imagery and LiDAR data. Adapted from [felferrari/tree_fusion](https://github.com/felferrari/tree_fusion).
 
+### PhD / lab (fluxo atual)
+
+- LiDAR (CHM + INTENSITY) + debug (ExecutionPolicy, Docker, LAZ/NOMENC):  
+  **[`scripts/lidar-products/README.md`](scripts/lidar-products/README.md)**
+- Treino/predict (MANet, ResUNet, …) sobre pool + AOI:  
+  **[`scripts/phd-run/README.md`](scripts/phd-run/README.md)**
+
+No lab use os wrappers `.cmd` na raiz (`run_lidar.cmd`, `run.cmd`) — evitam o
+Windows abrir o `.ps1` no editor e a ExecutionPolicy bloqueada.
+
 ---
 
 ## Table of Contents

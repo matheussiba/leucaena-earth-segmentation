@@ -61,7 +61,18 @@ Write-Host "Resolvendo AOI '$aoi' em $root ..."
 $resolveJson = & python (Join-Path $PSScriptRoot "resolve_aoi_lidar.py") --root $root --aoi $aoi
 if ($LASTEXITCODE -ne 0) { throw "resolve_aoi_lidar.py falhou" }
 $info = $resolveJson | ConvertFrom-Json
-if ($info.n_optical -lt 1) { throw "AOI nao resolveu nenhum tile optico (cheque NOMENC_* vs tiles/rgbnir)." }
+if ($info.n_optical -lt 1) {
+    throw "AOI nao resolveu nenhum tile optico. Cheque NOMENC_* vs tiles/optical/rgbnir/*.tif (ou tiles/rgbnir legado)."
+}
+# paths.rgbnir vem do resolve (optical/rgbnir ou legado)
+$RGB_HOST = ($info.paths.rgbnir -replace '/', '\')
+$RGB_CONT = ($info.paths.rgbnir -replace '\\', '/')
+# container: /data/tiles/...  (TILES_HOST monta tiles/)
+if ($RGB_CONT -match '[/\\]tiles[/\\](.+)$') {
+    $RGB_CONT = "/data/tiles/" + $Matches[1].Replace('\', '/')
+} else {
+    $RGB_CONT = "/data/tiles/optical/rgbnir"
+}
 if ($info.n_laz -lt 1) { throw "AOI nao resolveu nenhum LAZ (cheque NOMENC_* vs tiles/lidar/raw)." }
 
 $optical = @($info.optical_tiles)
@@ -127,14 +138,14 @@ if ($Engine -eq "python") {
         }
         $pyargs = @(
             "prep-lidar-scene.py",
-            "--optical", ("/data/tiles/rgbnir/{0}.tif" -f $tile),
+            "--optical", ("{0}/{1}.tif" -f $RGB_CONT.TrimEnd('/'), $tile),
             "--out", ("/data/tiles/lidar/rasters/{0}.tif" -f $tile),
             "--resolution", ("{0}" -f $Res).Replace(",", "."),
             "--chm-max-m", $ChmMax,
             "--laz"
         ) + $lazArgs
 
-        Write-Host ("  prep-lidar-scene {0} ({1} LAZ, res={2} m)" -f $tile, $tileLaz.Count, $Res)
+        Write-Host ("  prep-lidar-scene {0} (opt={1}/{0}.tif, {2} LAZ, res={3} m)" -f $tile, $RGB_CONT.TrimEnd('/'), $tileLaz.Count, $Res)
         docker compose run --rm lidar-align python @pyargs
         if ($LASTEXITCODE -ne 0) { throw ("prep-lidar-scene falhou para {0} (exit {1})" -f $tile, $LASTEXITCODE) }
         Write-Host ("  -> {0}" -f $outHost)
@@ -205,7 +216,7 @@ foreach ($tile in $optical) {
         "--out", ("/data/tiles/lidar/rasters/{0}.tif" -f $tile)
     )
     if ($NoOptical) { $pyargs += "--no-optical" }
-    else { $pyargs += @("--optical", ("/data/tiles/rgbnir/{0}.tif" -f $tile)) }
+    else { $pyargs += @("--optical", ("{0}/{1}.tif" -f $RGB_CONT.TrimEnd('/'), $tile)) }
     if ($NoIntensity) { $pyargs += "--no-intensity" }
 
     Write-Host ("  align {0} ({1} LAZ)" -f $tile, $tileLaz.Count)

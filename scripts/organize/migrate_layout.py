@@ -4,7 +4,7 @@ migrate_layout.py
 Migra a estrutura antiga (<root>/<aoi>-aoi/{opt,lidar,annotations}) para o
 layout novo com POOL central de tiles:
 
-    <root>/tiles/rgbnir/<tile>.tif
+    <root>/tiles/optical/rgbnir/<tile>.tif
     <root>/tiles/lidar/rasters/<tile>.tif
     <root>/tiles/lidar/raw/*.laz
     <root>/tiles/lidar/products/*
@@ -80,7 +80,7 @@ def _copy(src: Path, dst: Path, moves: list[dict], dry: bool) -> None:
 
 
 def migrate(root: Path, dry: bool) -> None:
-    pool_rgb = root / "tiles" / "rgbnir"
+    pool_rgb = root / "tiles" / "optical" / "rgbnir"
     pool_lid = root / "tiles" / "lidar" / "rasters"
     pool_raw = root / "tiles" / "lidar" / "raw"
     pool_prod = root / "tiles" / "lidar" / "products"
@@ -172,7 +172,7 @@ def migrate(root: Path, dry: bool) -> None:
 def build_aoi_gpkgs(root: Path, membership: dict[str, list[str]], dry: bool) -> None:
     import geopandas as gpd
 
-    pool_rgb = root / "tiles" / "rgbnir"
+    pool_rgb = root / "tiles" / "optical" / "rgbnir"
     aois_dir = root / "aois"
     print("\n===== Gerando aois/<aoi>.gpkg (footprints + NOMENC_10K) =====")
     for aoi_id, stems in membership.items():

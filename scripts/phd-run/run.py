@@ -79,7 +79,11 @@ class Layout:
     def __init__(self, root: Path):
         self.root = Path(root)
         self.tiles = self.root / "tiles"
-        self.rgbnir = self.tiles / "rgbnir"
+        self.opt_raw_rgb = self.tiles / "optical" / "raw" / "rgb"
+        self.opt_raw_ir = self.tiles / "optical" / "raw" / "ir"
+        self.rgbnir = self.tiles / "optical" / "rgbnir"
+        self.lidar_raw = self.tiles / "lidar" / "raw"
+        self.lidar_products = self.tiles / "lidar" / "products"
         self.lidar_rasters = self.tiles / "lidar" / "rasters"
         self.aois = self.root / "aois"
         self.annotations = self.root / "annotations"
@@ -88,7 +92,8 @@ class Layout:
         self.reports = self.root / "reports"
 
     def ensure(self):
-        for p in (self.tiles, self.rgbnir, self.lidar_rasters, self.aois,
+        for p in (self.opt_raw_rgb, self.opt_raw_ir, self.rgbnir,
+                  self.lidar_raw, self.lidar_products, self.lidar_rasters, self.aois,
                   self.annotations, self.datasets, self.experiments, self.reports):
             p.mkdir(parents=True, exist_ok=True)
 

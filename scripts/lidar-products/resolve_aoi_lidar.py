@@ -2,7 +2,7 @@
 resolve_aoi_lidar.py
 ====================
 Dado PHD_RUN_ROOT + nome do AOI, resolve via NOMENC do gpkg:
-  - optical_tiles : stems em tiles/rgbnir que o AOI seleciona
+  - optical_tiles : stems em tiles/optical/rgbnir que o AOI seleciona
   - laz_stems     : stems em tiles/lidar/raw que pertencem a esses tiles
 
 Regra LAZ (sem pasta temporaria):
@@ -22,7 +22,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 from pipeline.aoi_resolve import (  # noqa: E402
-    NOMENC_FIELDS, build_tile_index, resolve_tiles, _split_names,
+    NOMENC_FIELDS, build_tile_index, find_rgbnir_dir, resolve_tiles, _split_names,
 )
 
 
@@ -61,12 +61,19 @@ def main() -> None:
 
     root = Path(a.root)
     aoi_gpkg = root / "aois" / f"{a.aoi}.gpkg"
-    rgb_dir = root / "tiles" / "rgbnir"
-    laz_dir = root / "tiles" / "lidar" / "raw"
+    tiles_dir = root / "tiles"
+    rgb_dir = find_rgbnir_dir(tiles_dir)
+    laz_dir = tiles_dir / "lidar" / "raw"
     if not aoi_gpkg.exists():
         raise SystemExit(f"[ABORT] AOI nao encontrado: {aoi_gpkg}")
+    if not any(rgb_dir.glob("*.tif")):
+        raise SystemExit(
+            f"[ABORT] nenhum tile optico em {rgb_dir} "
+            f"(esperado tiles/optical/rgbnir/*.tif)."
+        )
 
-    index = build_tile_index(rgb_dir, root / "tiles" / ".tile_index.json")
+    # rebuild index se a pasta mudou (optical/ vs legado)
+    index = build_tile_index(rgb_dir, tiles_dir / ".tile_index.json", rebuild=True)
     optical, how = resolve_tiles(aoi_gpkg, index, rgb_dir, a.nomenc_field)
     laz = laz_for_tiles(aoi_gpkg, optical, laz_dir)
 

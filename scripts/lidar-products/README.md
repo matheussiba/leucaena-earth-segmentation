@@ -91,7 +91,11 @@ laz:     SF-23-Y-A-IV-4-SO-A-I .. -IV  (4 arquivos)
 PHD_RUN_ROOT/
   aois/261002-riodaspedras.gpkg          # NOMENC_2K/5K/10K
   tiles/
-    rgbnir/SF-23-Y-A-IV-4-SO-A.tif       # optico do AOI
+    optical/
+      raw/
+        rgb/                             # 3 bandas (IGC)
+        ir/                              # 3 bandas (IGC; NIR = banda 1)
+      rgbnir/SF-23-Y-A-IV-4-SO-A.tif     # 4 bandas (prep-rgbnir-from-rgb-ir.py)
     lidar/
       raw/SF-23-Y-A-IV-4-SO-A-*.laz      # LAZ do AOI (NOMENC_5K ou prefixo do tile)
       products/<laz>_{MDT,CHM}.tif       # saida do R (MDS opcional --mds)
@@ -131,7 +135,7 @@ estourar (cada LAZ carrega a nuvem), use `-Workers 2`. Sequencial: `-Workers 1`.
 |---|---|---|---|
 | Produtos R (MDT/MDS/CHM) | `run_lidar*.ps1` **`-Res`** → `make_lidar_products.R --res` | `0.5` | Resolução nativa dos produtos em `products/` |
 | Intensidade (PDAL) | `align_lidar_to_optical.py --resolution` | `1.0` | Grade nativa da intensidade antes do warp |
-| TIF final com óptico | grade do `tiles/rgbnir/<tile>.tif` | **0.25 m** | Align reamostra o CHM para a grade do RGBNIR |
+| TIF final com óptico | grade do `tiles/optical/rgbnir/<tile>.tif` | **0.25 m** | Align reamostra o CHM para a grade do RGBNIR |
 | TIF final sem óptico | `-NoOptical` + `-Res` | = `-Res` | Mantém grade nativa do LiDAR |
 
 Atenção: com align padrão (ao RGBNIR), o TIF em `rasters/` fica a **0.25 m**,
@@ -219,10 +223,10 @@ Como o match funciona (`resolve_aoi_lidar.py`):
 
 ### 5) `AOI nao resolveu nenhum tile optico`
 
-Cheque `tiles/rgbnir/` e os campos NOMENC do gpkg:
+Cheque `tiles/optical/rgbnir/` e os campos NOMENC do gpkg:
 
 ```powershell
-Get-ChildItem "$root\tiles\rgbnir" -Filter *.tif | Select-Object Name
+Get-ChildItem "$root\tiles\optical\rgbnir" -Filter *.tif | Select-Object Name
 python scripts\lidar-products\resolve_aoi_lidar.py --root $root --aoi 261002-riodaspedras
 ```
 
@@ -239,7 +243,7 @@ Test-Path $env:R_BIN   # ou o caminho escrito no .env
 
 - Docker engine running?
 - Imagem `leucaena-segmentation:cuda` presente?
-- Existe `tiles/rgbnir/<tile>.tif` para cada tile óptico do AOI?
+- Existe `tiles/optical/rgbnir/<tile>.tif` para cada tile óptico do AOI?
 - Existem `*_CHM.tif` em `tiles/lidar/products/` para os LAZ do AOI?
 
 ```powershell

@@ -4,7 +4,7 @@ aoi_resolve.py
 Resolve um AOI vetorial para os insumos de treino, sobre o POOL central de tiles.
 
 Dado:
-  - um pool  <root>/tiles/rgbnir/<tile>.tif  e  <root>/tiles/lidar/rasters/<tile>.tif
+  - um pool  <root>/tiles/optical/rgbnir/<tile>.tif  e  <root>/tiles/lidar/rasters/<tile>.tif
   - um AOI   <root>/aois/<aoi>.gpkg  (footprints com campos NOMENC_2K/5K/10K)
   - annotations global  <root>/annotations/<arquivo>.gpkg
 
@@ -39,6 +39,27 @@ from xml.sax.saxutils import escape
 import rasterio
 
 NOMENC_FIELDS = ["NOMENC_2K", "NOMENC_5K", "NOMENC_10K"]
+
+# Layout novo: tiles/optical/rgbnir ; legado: tiles/rgbnir
+def find_rgbnir_dir(tiles_dir: Path) -> Path:
+    """Prefere tiles/optical/rgbnir; cai para tiles/rgbnir se so o legado tiver .tif."""
+    tiles_dir = Path(tiles_dir)
+    candidates = [
+        tiles_dir / "optical" / "rgbnir",
+        tiles_dir / "rgbnir",
+    ]
+    for d in candidates:
+        if d.is_dir() and any(d.glob("*.tif")):
+            return d
+    return candidates[0]  # path canonico (mesmo vazio) p/ mensagem de erro clara
+
+
+def rgbnir_rel_under_tiles(rgb_dir: Path, tiles_dir: Path) -> str:
+    """Relativo a tiles/ p/ SourceFilename do VRT (ex.: optical/rgbnir)."""
+    try:
+        return Path(rgb_dir).resolve().relative_to(Path(tiles_dir).resolve()).as_posix()
+    except ValueError:
+        return "optical/rgbnir"
 
 # rasterio dtype -> GDAL VRT dataType
 _DT = {
@@ -237,7 +258,8 @@ def main() -> None:
 
     root = Path(a.root) if a.root else None
     tiles_dir = Path(a.tiles_dir) if a.tiles_dir else (root / "tiles")
-    rgb_dir = tiles_dir / "rgbnir"
+    rgb_dir = find_rgbnir_dir(tiles_dir)
+    rgb_rel = rgbnir_rel_under_tiles(rgb_dir, tiles_dir)
     lid_dir = tiles_dir / "lidar" / "rasters"
     aoi_gpkg = Path(a.aoi_gpkg) if a.aoi_gpkg else (root / "aois" / f"{a.aoi}.gpkg")
     out_dir = Path(a.out_dir)
@@ -247,6 +269,11 @@ def main() -> None:
         raise SystemExit(f"[ABORT] AOI gpkg nao encontrado: {aoi_gpkg}")
 
     print(f"Pool rgbnir: {rgb_dir}")
+    if not any(rgb_dir.glob("*.tif")):
+        raise SystemExit(
+            f"[ABORT] nenhum .tif em {rgb_dir} (nem em tiles/rgbnir legado). "
+            f"Coloque o RGBNIR 4 bandas em tiles/optical/rgbnir/."
+        )
     index = build_tile_index(rgb_dir, tiles_dir / ".tile_index.json", a.rebuild_index)
     print(f"  {len(index)} tiles indexados")
 
@@ -255,7 +282,7 @@ def main() -> None:
     if not tiles:
         raise SystemExit("[ABORT] nenhum tile resolvido para o AOI.")
 
-    rgb_prefix = a.src_prefix + "/rgbnir" if a.src_prefix else None
+    rgb_prefix = f"{a.src_prefix}/{rgb_rel}" if a.src_prefix else None
     lid_prefix = a.src_prefix + "/lidar/rasters" if a.src_prefix else None
     rgb_vrt = out_dir / "aoi_rgbnir.vrt"
     lid_vrt = out_dir / "aoi_lidar.vrt"

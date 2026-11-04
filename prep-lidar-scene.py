@@ -161,6 +161,8 @@ def _combine_blockwise(chm_path: str, int_path: str, out_path: str, grid: TileGr
         a2 = ib.ReadAsArray(0, y0, w, ys).astype(np.float32, copy=False)
         a1[np.isclose(a1, NODATA)] = 0.0; a1[~np.isfinite(a1)] = 0.0
         a2[np.isclose(a2, NODATA)] = 0.0; a2[~np.isfinite(a2)] = 0.0
+        # extremos: CHM negativo = DTM>DSM (ruido / borda) → sem vegetacao
+        a1[a1 < 0.0] = 0.0
         ob1.WriteArray(a1, 0, y0)
         ob2.WriteArray(a2, 0, y0)
         chm_min = min(chm_min, float(a1.min())); chm_max = max(chm_max, float(a1.max()))
@@ -239,8 +241,9 @@ def main() -> None:
 
         chm_full = os.path.join(tmp_dir, "chm_full.tif")
         int_full = os.path.join(tmp_dir, "int_full.tif")
-        _warp_to_grid(chm_vrt, grid, chm_full, resample="bilinear")
-        _warp_to_grid(int_vrt, grid, int_full, resample="average")
+        # near (nao bilinear): nao espalha CHM para dentro de gaps / nao inventa altura
+        _warp_to_grid(chm_vrt, grid, chm_full, resample="near")
+        _warp_to_grid(int_vrt, grid, int_full, resample="near")
 
         log(f"combining bands block-wise -> {args.out}")
         m = _combine_blockwise(chm_full, int_full, args.out, grid, log, args.block_rows)

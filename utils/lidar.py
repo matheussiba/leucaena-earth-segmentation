@@ -23,8 +23,9 @@ We do that in three steps:
    ground), which is the safest assumption for a vegetation index.
 
 3. **Align** CHM + INTENSITY to the RGBN tile grid via ``gdal.Warp``
-   (bilinear for CHM, average for INTENSITY). The resulting raster has
-   the exact same width / height / geotransform as the reference RGBN.
+   (``near`` for both — same as the R path; avoids bleeding height into gaps).
+   The resulting raster has the exact same width / height / geotransform as
+   the reference RGBN.
 
 The output is a single 2-band ``float32`` GeoTIFF in the order
 ``[CHM, INTENSITY]`` (matches ``conf.general.BAND_NAMES_LIDAR``).
@@ -191,7 +192,9 @@ def build_single_writer_pipeline(
         "data_type": "float32",
         "nodata": -9999.0,
         "resolution": float(resolution_m),
-        "radius": float(resolution_m) * 1.5,
+        # radius = res: ponto so entra na celula (e vizinha imediata na borda).
+        # Antes era 1.5*res e "vazava" max/min para celulas sem ponto (flare leve).
+        "radius": float(resolution_m),
         "output_type": output_type,
     }
     if dimension is not None:
@@ -450,8 +453,8 @@ def process_laz_to_lidar_tif(
         # Aligned mode: warp CHM and INTENSITY onto the RGBN grid.
         chm_warp = os.path.join(workdir, f"{stem}_chm_warp.tif")
         inten_warp = os.path.join(workdir, f"{stem}_intensity_warp.tif")
-        warp_to_grid(chm_tmp, reference_grid, chm_warp, resample_alg="bilinear")
-        warp_to_grid(inten_tmp, reference_grid, inten_warp, resample_alg="average")
+        warp_to_grid(chm_tmp, reference_grid, chm_warp, resample_alg="near")
+        warp_to_grid(inten_tmp, reference_grid, inten_warp, resample_alg="near")
 
         stack_chm_intensity(chm_warp, inten_warp, out_path, reference_grid)
         return {

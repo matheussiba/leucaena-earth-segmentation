@@ -1,20 +1,27 @@
-# Orquestrador de produtos LiDAR (abordagem C)
+# Orquestrador de produtos LiDAR
 
-Encadeia **R (lidR)** → **Python/Docker (align)** para gerar o raster LiDAR
-de 2 bandas `[CHM, INTENSITY]` que o treino consome.
+Gera o raster LiDAR de 2 bandas `[CHM, INTENSITY]` alinhado ao óptico do AOI.
+O usuário escolhe o **engine**:
+
+| `-Engine` | O que roda | Quando usar |
+|---|---|---|
+| **`r`** (default) | `make_lidar_products.R` (lidR TIN+lspikefree) → `align_lidar_to_optical.py` | CHM “de laboratório” (TIN com `max_edge`) |
+| **`python`** | `prep-lidar-scene.py` (PDAL: DSM − DTM min + INT) via Docker | Método **antigo** (semana passada): gaps ficam vazios, sem TIN longo |
+
+Os dois escrevem o **mesmo** destino:
+`PHD_RUN_ROOT/tiles/lidar/rasters/<tile>.tif`.
 
 O AOI (`aois/<aoi>.gpkg`) define os tiles via `NOMENC_2K / NOMENC_5K / NOMENC_10K`.
-O script resolve quais `.laz` do **pool** pertencem a esses tiles e filtra por
-`--names` / `--laz-names` — **sem pasta temporária**.
 
 ## Arquivos
 
 | Arquivo | Onde roda | O que faz |
 |---|---|---|
 | `resolve_aoi_lidar.py` | host | AOI.gpkg → tiles ópticos + stems LAZ (NOMENC) |
-| `make_lidar_products.R` | host (R + lidR) | Por `.laz`: `MDT` + `CHM` (MDS só com `--mds`) |
-| `align_lidar_to_optical.py` | Docker (GDAL+PDAL) | Mosaica CHM, alinha ao RGBNIR, gera `[CHM, INTENSITY]` |
-| `run_lidar_pipeline.ps1` | host | Orquestra resolve → R → align |
+| `make_lidar_products.R` | host (R + lidR) | Engine **r**: MDT + CHM (MDS opcional `--mds`) |
+| `align_lidar_to_optical.py` | Docker | Engine **r**: mosaica CHM R + INT → grade do óptico |
+| `../../prep-lidar-scene.py` | Docker | Engine **python**: PDAL DSM/DTM/INT + warp (método antigo) |
+| `run_lidar_pipeline.ps1` | host | Orquestra resolve + engine escolhido |
 | `docker-compose.yml` | — | Monta `PHD_RUN_ROOT/tiles` em `/data/tiles` |
 | `../../run_lidar.ps1` / `../../run_lidar.cmd` | raiz do repo | Wrappers (preferir o `.cmd` no lab) |
 
@@ -29,49 +36,44 @@ TRAIN_PROFILE=lab                                          # ou home
 R_BIN=C:/Program Files/R/R-4.6.1/bin/Rscript.exe           # se Rscript nao estiver no PATH
 ```
 
-2. **R** no host com pacotes `lidR`, `terra` (e `RCSF` se usar `--csf`).
-3. **Docker Desktop** com engine running + imagem `leucaena-segmentation:cuda`.
+2. **Docker Desktop** com engine running + imagem `leucaena-segmentation:cuda`
+   (obrigatório para **python**; também para o align do **r**).
+3. **R** no host (`lidR`, `terra`) — só se usar `-Engine r` (`R_BIN` no `.env`).
 4. Pool populado sob `PHD_RUN_ROOT` (ver layout abaixo).
 
-## Como rodar (raiz do repo)
+## Como rodar (raiz do repo / PowerShell)
 
-No lab, **use o `.cmd`** (o Windows costuma abrir `.ps1` no editor, e a
-ExecutionPolicy do PowerShell bloqueia scripts):
+No lab, **use o `.cmd`** (ExecutionPolicy / `.ps1` abre no editor):
 
 ```powershell
 cd <repo>   # ex.: C:\Users\CMQ\Documents\MSB\0-GITHUB\leucaena-earth-segmentation
 
-# Pipeline completo: R (MDT/MDS/CHM) + align [CHM, INTENSITY]
+# --- Engine R (default): lidR + align ---
 .\run_lidar.cmd -aoi 261002-riodaspedras
+.\run_lidar.cmd -aoi 261002-riodaspedras -Engine r -Force
+.\run_lidar.cmd -aoi 261002-riodaspedras -Engine r -Mode products   # so R
+.\run_lidar.cmd -aoi 261002-riodaspedras -Engine r -Mode align      # so align
+.\run_lidar.cmd -aoi 261002-riodaspedras -Engine r -Res 1 -MaxEdge 50 -Workers 4
 
-# So produtos R
-.\run_lidar.cmd -aoi 261002-riodaspedras -Mode products
-
-# So align (CHM ja existe)
-.\run_lidar.cmd -aoi 261002-riodaspedras -Mode align
-
-# Refazer mesmo com produtos existentes
-.\run_lidar.cmd -aoi 261002-riodaspedras -Force
-
-# Sem intensidade (banda 2 = zeros) / sem alinhar ao optico
-.\run_lidar.cmd -aoi 261002-riodaspedras -NoIntensity
-.\run_lidar.cmd -aoi 261002-riodaspedras -NoOptical
-
-# Resolucao dos produtos R (default atual: 0.5 m). Ex.: 1 m
-.\run_lidar.cmd -aoi 261002-riodaspedras -Res 1
-
-# Paralelismo: 4 LAZ ao mesmo tempo (default). RAM alta -> baixe Workers.
-.\run_lidar.cmd -aoi 261002-riodaspedras -Workers 4 -Threads 12
-.\run_lidar.cmd -aoi 261002-riodaspedras -Workers 2 -Threads 12
+# --- Engine python (PDAL antigo = prep-lidar-scene.py) ---
+.\run_lidar.cmd -aoi 261002-riodaspedras -Engine python
+.\run_lidar.cmd -aoi 261002-riodaspedras -Engine python -Force
+# res nativa PDAL default = 1.0 m (override: -Res 1)
 ```
 
-Cada worker processa 1 LAZ; threads do `lidR` por worker ≈ `Threads/Workers`
-(ex.: 4 workers × 3 threads).
+### Qual engine escolher?
 
-Equivalente explícito se o `.cmd` não existir ainda:
+| | **r** (lidR) | **python** (PDAL / `prep-lidar-scene.py`) |
+|---|---|---|
+| CHM | nuvem normalizada + `lspikefree` | `DSM − DTM` (DTM = min Z por célula) |
+| Buracos / falha de faixa | NA se aresta TIN > `-MaxEdge` | sem pontos → 0 / vazio (comportamento antigo) |
+| Velocidade | mais lento (R + nuvem na RAM) | mais rápido (stream PDAL) |
+| Requer R no host | sim | não (só Docker) |
+
+Equivalente Bypass:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\run_lidar.ps1 -aoi 261002-riodaspedras
+powershell -NoProfile -ExecutionPolicy Bypass -File .\run_lidar.ps1 -aoi 261002-riodaspedras -Engine python
 ```
 
 Saída esperada do resolve (Rio das Pedras):

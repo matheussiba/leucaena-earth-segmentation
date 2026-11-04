@@ -1,30 +1,32 @@
 # =============================================================================
-# Orquestrador LiDAR (abordagem C): R (lidR) -> Python (align ao optico)
+# Orquestrador LiDAR: AOI (NOMENC) -> [CHM, INTENSITY] no pool
 # -----------------------------------------------------------------------------
-# Seleciona LAZ/tiles pelo AOI vetorial (NOMENC_* no aois/<aoi>.gpkg) sobre o
-# POOL central (PHD_RUN_ROOT/tiles). Sem pasta temporaria: R/align filtram por
-# --names / --laz-names / --chm-glob.
+# Engines (-Engine):
+#   r       (default) R/lidR (MDT TIN + CHM lspikefree) -> align Docker
+#   python  prep-lidar-scene.py (PDAL DSM-DTM min + INT) via Docker — metodo antigo
 #
 # Exemplo:
 #   .\run_lidar_pipeline.ps1 -aoi 261002-riodaspedras
-#   .\run_lidar_pipeline.ps1 -aoi 261002-riodaspedras -Mode products
-#   .\run_lidar_pipeline.ps1 -aoi 261002-riodaspedras -Mode align -Force
+#   .\run_lidar_pipeline.ps1 -aoi 261002-riodaspedras -Engine python
+#   .\run_lidar_pipeline.ps1 -aoi 261002-riodaspedras -Engine r -Mode products
 #
-# .env (raiz do repo): PHD_RUN_ROOT, R_BIN (se Rscript nao estiver no PATH)
+# .env: PHD_RUN_ROOT, R_BIN (so para -Engine r)
 # =============================================================================
 param(
     [Parameter(Mandatory = $true)]
     [string]$aoi,
+    [ValidateSet("r", "python")]
+    [string]$Engine = "r",
     [ValidateSet("all", "products", "align")]
     [string]$Mode = "all",
     [switch]$Force,
     [switch]$NoOptical,
     [switch]$NoIntensity,
-    [double]$Res = 0.5,
+    [double]$Res = -1,       # -1 = default por engine (r:0.5, python:1.0)
     [double]$ChmMax = 120,
-    [double]$MaxEdge = 50,  # m; TIN nao triangula arestas maiores (buracos ficam NA)
-    [int]$Workers = 4,   # LAZ em paralelo (R); threads lidR = Threads/Workers
-    [int]$Threads = 12   # total de threads lidR a repartir entre workers
+    [double]$MaxEdge = 50,   # so Engine=r (TIN)
+    [int]$Workers = 4,       # so Engine=r
+    [int]$Threads = 12       # so Engine=r
 )
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
@@ -50,6 +52,10 @@ if ($vars.ContainsKey("R_BIN") -and -not [string]::IsNullOrWhiteSpace($vars["R_B
     $Rbin = $vars["R_BIN"].Trim()
 }
 
+if ($Res -lt 0) {
+    $Res = if ($Engine -eq "python") { 1.0 } else { 0.5 }
+}
+
 # ---- resolve AOI -> optical tiles + laz stems (NOMENC) ----------------------
 Write-Host "Resolvendo AOI '$aoi' em $root ..."
 $resolveJson = & python (Join-Path $PSScriptRoot "resolve_aoi_lidar.py") --root $root --aoi $aoi
@@ -63,28 +69,86 @@ $lazStems = @($info.laz_stems)
 $lazNamesCsv = ($lazStems -join ",")
 $LAZ_HOST  = $info.paths.laz  -replace '/', '\'
 $PROD_HOST = $info.paths.products -replace '/', '\'
-$RGB_HOST  = $info.paths.rgbnir -replace '/', '\'
 $RAS_HOST  = $info.paths.rasters -replace '/', '\'
 
-Write-Host "AOI: $aoi | via $($info.resolved_via)"
+Write-Host "AOI: $aoi | via $($info.resolved_via) | Engine=$Engine"
 Write-Host "  optical ($($optical.Count)): $($optical -join ', ')"
 Write-Host "  laz     ($($lazStems.Count)): $($lazStems -join ', ')"
-Write-Host "Mode: $Mode | Force=$Force | NoOptical=$NoOptical | NoIntensity=$NoIntensity"
-Write-Host "Workers=$Workers | Threads=$Threads | MaxEdge=$MaxEdge m (TIN)"
-Write-Host "R: $Rbin"
+Write-Host "Mode: $Mode | Force=$Force | Res=$Res | ChmMax=$ChmMax"
+if ($Engine -eq "r") {
+    Write-Host "Workers=$Workers | Threads=$Threads | MaxEdge=$MaxEdge m (TIN)"
+    Write-Host "R: $Rbin"
+}
 
 New-Item -ItemType Directory -Force -Path $PROD_HOST, $RAS_HOST | Out-Null
+$env:TILES_HOST = ($root + "\tiles") -replace '\\', '/'
 
-# ---- PASSO 1: R (lidR) — filtra pool por --names ----------------------------
-function Aoi-Products-Exist {
+function Get-TileLaz([string]$tile) {
+    return @($lazStems | Where-Object { $_ -eq $tile -or $_.StartsWith(("{0}-" -f $tile)) })
+}
+
+function Test-Aoi-R-Products {
     foreach ($stem in $lazStems) {
         if (-not (Test-Path (Join-Path $PROD_HOST "${stem}_CHM.tif"))) { return $false }
     }
     return $true
 }
 
+# =============================================================================
+# Engine = python  (prep-lidar-scene.py — PDAL antigo, DSM-DTM min)
+# =============================================================================
+if ($Engine -eq "python") {
+    if ($NoOptical) {
+        throw "-Engine python exige optico (prep-lidar-scene.py). Sem -NoOptical."
+    }
+    if ($Mode -eq "align") {
+        Write-Host "[WARN] -Engine python nao tem passo align separado (tudo em prep-lidar-scene). Rodando pipeline completo."
+    }
+    if ($NoIntensity) {
+        Write-Host "[WARN] -NoIntensity ignorado em -Engine python (prep sempre gera INTENSITY)."
+    }
+
+    Write-Host ("`n[Engine python] prep-lidar-scene.py via Docker (TILES_HOST={0})" -f $env:TILES_HOST)
+
+    foreach ($tile in $optical) {
+        $outHost = Join-Path $RAS_HOST ("{0}.tif" -f $tile)
+        if ((Test-Path $outHost) -and -not $Force) {
+            Write-Host ("  ja existe {0}.tif -> pulando (use -Force p/ refazer)" -f $tile)
+            continue
+        }
+        $tileLaz = Get-TileLaz $tile
+        if ($tileLaz.Count -eq 0) {
+            Write-Host ("  [WARN] nenhum LAZ para tile {0} - pulando" -f $tile)
+            continue
+        }
+        $lazArgs = @()
+        foreach ($stem in $tileLaz) {
+            $lazArgs += "/data/tiles/lidar/raw/{0}.laz" -f $stem
+        }
+        $pyargs = @(
+            "prep-lidar-scene.py",
+            "--optical", ("/data/tiles/rgbnir/{0}.tif" -f $tile),
+            "--out", ("/data/tiles/lidar/rasters/{0}.tif" -f $tile),
+            "--resolution", ("{0}" -f $Res).Replace(",", "."),
+            "--chm-max-m", $ChmMax,
+            "--laz"
+        ) + $lazArgs
+
+        Write-Host ("  prep-lidar-scene {0} ({1} LAZ, res={2} m)" -f $tile, $tileLaz.Count, $Res)
+        docker compose run --rm lidar-align python @pyargs
+        if ($LASTEXITCODE -ne 0) { throw ("prep-lidar-scene falhou para {0} (exit {1})" -f $tile, $LASTEXITCODE) }
+        Write-Host ("  -> {0}" -f $outHost)
+    }
+
+    Write-Host ("`nLiDAR do AOI '{0}' pronto (engine=python) em: {1}" -f $aoi, $RAS_HOST)
+    return
+}
+
+# =============================================================================
+# Engine = r  (default): make_lidar_products.R -> align_lidar_to_optical.py
+# =============================================================================
 if ($Mode -eq "products" -or $Mode -eq "all") {
-    $have = Aoi-Products-Exist
+    $have = Test-Aoi-R-Products
     if ($have -and -not $Force -and $Mode -eq "all") {
         Write-Host "CHM do AOI ja existem em $PROD_HOST -> pulando R (use -Force p/ refazer)."
     } else {
@@ -112,12 +176,10 @@ if ($Mode -eq "products") {
     return
 }
 
-if (-not (Aoi-Products-Exist)) {
+if (-not (Test-Aoi-R-Products)) {
     throw "Sem CHM do AOI em $PROD_HOST. Rode -Mode products (ou all) primeiro."
 }
 
-# ---- PASSO 2: Docker align - 1 raster por tile optico do AOI ----------------
-$env:TILES_HOST = ($root + "\tiles") -replace '\\', '/'
 Write-Host ("`n[PASSO 2 - Docker] align por tile optico (TILES_HOST={0})" -f $env:TILES_HOST)
 
 foreach ($tile in $optical) {
@@ -126,8 +188,7 @@ foreach ($tile in $optical) {
         Write-Host ("  ja existe {0}.tif -> pulando align (use -Force p/ refazer)" -f $tile)
         continue
     }
-    # CHM/LAZ do tile: stem == tile OU stem comeca com "tile-"
-    $tileLaz = @($lazStems | Where-Object { $_ -eq $tile -or $_.StartsWith(("{0}-" -f $tile)) })
+    $tileLaz = Get-TileLaz $tile
     if ($tileLaz.Count -eq 0) {
         Write-Host ("  [WARN] nenhum LAZ para tile {0} - pulando" -f $tile)
         continue
@@ -153,4 +214,4 @@ foreach ($tile in $optical) {
     Write-Host ("  -> {0}" -f $outHost)
 }
 
-Write-Host ("`nLiDAR do AOI '{0}' pronto em: {1}" -f $aoi, $RAS_HOST)
+Write-Host ("`nLiDAR do AOI '{0}' pronto (engine=r) em: {1}" -f $aoi, $RAS_HOST)

@@ -44,10 +44,11 @@ O MANet late-fusion precisa de `tiles/lidar/rasters/<tile>.tif` `[CHM, INTENSITY
 
 ```powershell
 cd <repo>
-.\run_lidar.cmd -aoi 261002-riodaspedras
+.\run_lidar.cmd -aoi 261002-riodaspedras                 # Engine r (lidR, default)
+.\run_lidar.cmd -aoi 261002-riodaspedras -Engine python  # PDAL antigo (prep-lidar-scene.py)
 ```
 
-Debug completo (ExecutionPolicy, Docker, LAZ/NOMENC): ver
+Debug / engines / buracos TIN: ver
 [`scripts/lidar-products/README.md`](../lidar-products/README.md).
 
 ## Como rodar (raiz do repo)

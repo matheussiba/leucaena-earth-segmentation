@@ -67,9 +67,9 @@ $resolveJson = & python (Join-Path $PSScriptRoot "resolve_aoi_lidar.py") --root 
 if ($LASTEXITCODE -ne 0) { throw "resolve_aoi_lidar.py falhou" }
 $info = $resolveJson | ConvertFrom-Json
 if ($info.n_optical -lt 1) {
-    throw "AOI nao resolveu nenhum tile optico. Cheque NOMENC_* vs tiles/optical/rgbnir/*.tif (ou tiles/rgbnir legado)."
+    throw "AOI nao resolveu nenhum tile optico. Cheque NOMENC_* vs tiles/optical/rgbnir/*.tif."
 }
-# paths.rgbnir vem do resolve (optical/rgbnir ou legado)
+# paths.rgbnir = PHD_RUN_ROOT/tiles/optical/rgbnir
 $RGB_HOST = ($info.paths.rgbnir -replace '/', '\')
 $RGB_CONT = ($info.paths.rgbnir -replace '\\', '/')
 # container: /data/tiles/...  (TILES_HOST monta tiles/)

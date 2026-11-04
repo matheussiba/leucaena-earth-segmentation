@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -40,49 +39,41 @@ import rasterio
 
 NOMENC_FIELDS = ["NOMENC_2K", "NOMENC_5K", "NOMENC_10K"]
 
-# Layout novo: tiles/optical/rgbnir ; legado: tiles/rgbnir
-def rgbnir_candidate_dirs(tiles_dir: Path) -> list[Path]:
-    tiles_dir = Path(tiles_dir)
-    return [tiles_dir / "optical" / "rgbnir", tiles_dir / "rgbnir"]
+# Pool canonico: tiles/optical/rgbnir/<tile>.tif
+RGBNIR_REL = "optical/rgbnir"
 
 
 def find_rgbnir_dir(tiles_dir: Path) -> Path:
-    """Prefere tiles/optical/rgbnir; cai para tiles/rgbnir se so o legado tiver .tif."""
-    for d in rgbnir_candidate_dirs(tiles_dir):
-        if d.is_dir() and any(d.glob("*.tif")):
-            return d
-    return rgbnir_candidate_dirs(tiles_dir)[0]
+    """Pasta do pool RGBNIR 4 bandas: <tiles>/optical/rgbnir."""
+    return Path(tiles_dir) / "optical" / "rgbnir"
 
 
 def build_optical_pool(tiles_dir: Path) -> tuple[dict, dict[str, Path]]:
-    """Indice + caminho real por stem. Legado primeiro, optical sobrescreve (prioridade)."""
+    """Indice + caminho por stem em tiles/optical/rgbnir."""
     tiles_dir = Path(tiles_dir)
+    rgb_dir = find_rgbnir_dir(tiles_dir)
     index: dict[str, dict] = {}
     stem_paths: dict[str, Path] = {}
-    for d in (tiles_dir / "rgbnir", tiles_dir / "optical" / "rgbnir"):
-        if not d.is_dir():
-            continue
-        for tif in sorted(d.glob("*.tif")):
-            try:
-                with rasterio.open(tif) as ds:
-                    b = ds.bounds
-                    index[tif.stem] = {
-                        "bounds": [b.left, b.bottom, b.right, b.top],
-                        "crs": ds.crs.to_string() if ds.crs else None,
-                        "rel": tif.resolve().relative_to(tiles_dir.resolve()).as_posix(),
-                    }
-                stem_paths[tif.stem] = tif
-            except Exception as exc:  # noqa: BLE001
-                print(f"[warn] falha indexando {tif.name}: {exc}")
+    if not rgb_dir.is_dir():
+        return index, stem_paths
+    for tif in sorted(rgb_dir.glob("*.tif")):
+        try:
+            with rasterio.open(tif) as ds:
+                b = ds.bounds
+                index[tif.stem] = {
+                    "bounds": [b.left, b.bottom, b.right, b.top],
+                    "crs": ds.crs.to_string() if ds.crs else None,
+                    "rel": f"{RGBNIR_REL}/{tif.name}",
+                }
+            stem_paths[tif.stem] = tif
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] falha indexando {tif.name}: {exc}")
     return index, stem_paths
 
 
-def rgbnir_rel_under_tiles(rgb_dir: Path, tiles_dir: Path) -> str:
-    """Relativo a tiles/ p/ SourceFilename do VRT (ex.: optical/rgbnir)."""
-    try:
-        return Path(rgb_dir).resolve().relative_to(Path(tiles_dir).resolve()).as_posix()
-    except ValueError:
-        return "optical/rgbnir"
+def rgbnir_rel_under_tiles(rgb_dir: Path | None = None, tiles_dir: Path | None = None) -> str:
+    """Relativo a tiles/ p/ SourceFilename do VRT."""
+    return RGBNIR_REL
 
 # rasterio dtype -> GDAL VRT dataType
 _DT = {
@@ -173,34 +164,24 @@ def resolve_tiles(aoi_gpkg: Path, index: dict, rgb_dir: Path | None = None,
 # VRT (mosaico virtual, puro XML)
 # ---------------------------------------------------------------------------
 def write_vrt(stems: list[str], src_dir: Path, out_vrt: Path,
-              src_prefix: str | None = None,
-              stem_paths: dict[str, Path] | None = None,
-              tiles_dir: Path | None = None) -> dict:
-    """Monta um .vrt mosaicando <src_dir>/<stem>.tif (ou stem_paths).
+              src_prefix: str | None = None) -> dict:
+    """Monta um .vrt mosaicando <src_dir>/<stem>.tif.
 
-    src_prefix: prefixo no SourceFilename (ex. /data/tiles). Com stem_paths +
-    tiles_dir, cada fonte usa o relativo real (optical/rgbnir/... ou rgbnir/...).
+    src_prefix: prefixo no SourceFilename (ex. /data/tiles/optical/rgbnir).
+    Default = caminho absoluto de src_dir.
     """
+    if src_prefix is None:
+        src_prefix = str(src_dir).replace("\\", "/")
     metas = []
     for stem in stems:
-        f = (stem_paths.get(stem) if stem_paths else None) or (src_dir / f"{stem}.tif")
-        if f is None or not Path(f).exists():
+        f = src_dir / f"{stem}.tif"
+        if not f.exists():
             continue
-        f = Path(f)
         with rasterio.open(f) as ds:
             t = ds.transform
-            if src_prefix and tiles_dir is not None:
-                try:
-                    rel = f.resolve().relative_to(Path(tiles_dir).resolve()).as_posix()
-                    src_name = f"{src_prefix.rstrip('/')}/{rel}"
-                except ValueError:
-                    src_name = f"{src_prefix.rstrip('/')}/{stem}.tif"
-            elif src_prefix is not None:
-                src_name = f"{src_prefix.rstrip('/')}/{stem}.tif"
-            else:
-                src_name = str(f).replace("\\", "/")
             metas.append({
-                "stem": stem, "src": src_name,
+                "stem": stem,
+                "src": f"{src_prefix.rstrip('/')}/{stem}.tif",
                 "w": ds.width, "h": ds.height,
                 "count": ds.count, "dtype": ds.dtypes[0],
                 "nodata": ds.nodata,
@@ -209,8 +190,8 @@ def write_vrt(stems: list[str], src_dir: Path, out_vrt: Path,
                 "crs": ds.crs.to_wkt() if ds.crs else "",
             })
     if not metas:
-        return {"ok": False, "n": 0, "missing": [s for s in stems
-                if not ((stem_paths or {}).get(s) or (src_dir / f"{s}.tif")).exists()]}
+        return {"ok": False, "n": 0,
+                "missing": [s for s in stems if not (src_dir / f"{s}.tif").exists()]}
 
     px = metas[0]["px"]
     py = metas[0]["py"]
@@ -301,6 +282,7 @@ def main() -> None:
 
     root = Path(a.root) if a.root else None
     tiles_dir = Path(a.tiles_dir) if a.tiles_dir else (root / "tiles")
+    rgb_dir = find_rgbnir_dir(tiles_dir)
     lid_dir = tiles_dir / "lidar" / "rasters"
     aoi_gpkg = Path(a.aoi_gpkg) if a.aoi_gpkg else (root / "aois" / f"{a.aoi}.gpkg")
     out_dir = Path(a.out_dir)
@@ -310,25 +292,21 @@ def main() -> None:
         raise SystemExit(f"[ABORT] AOI gpkg nao encontrado: {aoi_gpkg}")
 
     index, stem_paths = build_optical_pool(tiles_dir)
-    # cache so para debug; sempre reconstruido do disco (optical + legado)
+    # cache sempre reconstruido do disco
     (tiles_dir / ".tile_index.json").write_text(
         json.dumps({k: {kk: vv for kk, vv in v.items() if kk != "rel"}
                     for k, v in index.items()}, indent=2),
         encoding="utf-8")
-    print(f"Pool rgbnir: {len(stem_paths)} tiles "
-          f"(optical/rgbnir + rgbnir legado)")
+    print(f"Pool rgbnir: {rgb_dir}  ({len(stem_paths)} tiles)")
     if not stem_paths:
         raise SystemExit(
-            "[ABORT] nenhum .tif em tiles/optical/rgbnir/ nem tiles/rgbnir/. "
+            f"[ABORT] nenhum .tif em {rgb_dir}. "
             "Coloque o RGBNIR 4 bandas em tiles/optical/rgbnir/."
         )
-    for stem, pth in sorted(stem_paths.items())[:3]:
-        print(f"  ex.: {stem} -> {pth}")
 
-    tiles, how = resolve_tiles(aoi_gpkg, index, None, a.nomenc_field)
+    tiles, how = resolve_tiles(aoi_gpkg, index, rgb_dir, a.nomenc_field)
     print(f"AOI '{aoi_gpkg.stem}' -> {len(tiles)} tiles (via {how})")
     if not tiles:
-        # dica: NOMENC do AOI vs arquivos presentes
         import geopandas as gpd
         gdf = gpd.read_file(aoi_gpkg)
         wanted = set()
@@ -339,34 +317,26 @@ def main() -> None:
         missing_wanted = sorted(wanted - set(stem_paths))[:8]
         raise SystemExit(
             "[ABORT] nenhum tile resolvido para o AOI. "
-            f"Pool tem {len(stem_paths)} RGBNIR; "
-            f"NOMENC sem arquivo no pool (amostra): {missing_wanted}. "
-            "Coloque o .tif 4 bandas em tiles/optical/rgbnir/."
-        )
-    missing = [t for t in tiles if t not in stem_paths]
-    if missing:
-        raise SystemExit(
-            f"[ABORT] tiles do AOI sem arquivo RGBNIR: {missing}. "
-            f"Coloque em tiles/optical/rgbnir/ (ex.: {missing[0]}.tif)."
+            f"Pool tem {len(stem_paths)} RGBNIR em {rgb_dir}; "
+            f"NOMENC sem arquivo (amostra): {missing_wanted}."
         )
 
-    rgb_prefix = a.src_prefix  # /data/tiles ; write_vrt monta optical/rgbnir/...
-    lid_prefix = a.src_prefix + "/lidar/rasters" if a.src_prefix else None
+    rgb_prefix = (f"{a.src_prefix.rstrip('/')}/{RGBNIR_REL}"
+                  if a.src_prefix else None)
+    lid_prefix = (f"{a.src_prefix.rstrip('/')}/lidar/rasters"
+                  if a.src_prefix else None)
     rgb_vrt = out_dir / "aoi_rgbnir.vrt"
     lid_vrt = out_dir / "aoi_lidar.vrt"
-    # remove VRT antigo (pode apontar p/ path errado)
     if rgb_vrt.exists():
         rgb_vrt.unlink()
-    rgb_info = write_vrt(tiles, tiles_dir / "optical" / "rgbnir", rgb_vrt,
-                         src_prefix=rgb_prefix, stem_paths=stem_paths,
-                         tiles_dir=tiles_dir)
+    rgb_info = write_vrt(tiles, rgb_dir, rgb_vrt, rgb_prefix)
     lid_info = write_vrt(tiles, lid_dir, lid_vrt, lid_prefix)
     print(f"  rgbnir VRT: {rgb_info}")
     print(f"  lidar  VRT: {lid_info} (tiles sem lidar sao ignorados)")
     if not rgb_info.get("ok"):
         raise SystemExit(
             f"[ABORT] falha ao montar aoi_rgbnir.vrt: {rgb_info}. "
-            f"Verifique se os .tif do AOI existem em tiles/optical/rgbnir/."
+            f"Verifique se os .tif do AOI existem em {rgb_dir}."
         )
 
     annot_info = None

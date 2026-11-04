@@ -62,6 +62,7 @@ def main() -> None:
     root = Path(a.root)
     aoi_gpkg = root / "aois" / f"{a.aoi}.gpkg"
     tiles_dir = root / "tiles"
+    rgb_dir = find_rgbnir_dir(tiles_dir)
     laz_dir = tiles_dir / "lidar" / "raw"
     if not aoi_gpkg.exists():
         raise SystemExit(f"[ABORT] AOI nao encontrado: {aoi_gpkg}")
@@ -69,21 +70,17 @@ def main() -> None:
     index, stem_paths = build_optical_pool(tiles_dir)
     if not stem_paths:
         raise SystemExit(
-            "[ABORT] nenhum tile optico em tiles/optical/rgbnir/ "
-            "nem tiles/rgbnir/ (legado)."
+            f"[ABORT] nenhum tile optico em {rgb_dir} "
+            "(esperado tiles/optical/rgbnir/*.tif)."
         )
 
-    optical, how = resolve_tiles(aoi_gpkg, index, None, a.nomenc_field)
+    optical, how = resolve_tiles(aoi_gpkg, index, rgb_dir, a.nomenc_field)
     if not optical:
         raise SystemExit(
             "[ABORT] AOI nao resolveu nenhum tile optico. "
             "Cheque NOMENC_* vs tiles/optical/rgbnir/*.tif."
         )
     laz = laz_for_tiles(aoi_gpkg, optical, laz_dir)
-    # pasta "representativa" (optical se houver, senao legado)
-    rgb_dir = find_rgbnir_dir(tiles_dir)
-    if optical and optical[0] in stem_paths:
-        rgb_dir = stem_paths[optical[0]].parent
 
     out = {
         "aoi": a.aoi,

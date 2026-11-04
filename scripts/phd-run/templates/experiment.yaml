@@ -15,7 +15,7 @@ bands_lidar: [CHM, INTENSITY]  # documental
 patch_size: 512
 on_the_fly: true               # padrao; false => usa/gera patches salvos
 save_patches: false            # true => datasets/<id> ganha patches/ e id ganha __p<size>
-epochs: 60
+epochs: 30                     # max; salva best_model.pth + last_model.pth a cada epoca
 lr: 1.0e-4
 pretrained: true
 

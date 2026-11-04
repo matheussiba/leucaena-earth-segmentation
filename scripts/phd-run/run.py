@@ -299,7 +299,7 @@ def phase_train(lay, cfg, aoi, res, run, runtime, dry=False):
         "--rgb_resolution", str(cfg.get("rgb_resolution", 0.25)),
         "--chm_resolution", str(cfg.get("chm_resolution", 0.25)),
         "--patch_size", str(cfg.get("patch_size", 512)),
-        "--epochs", str(cfg.get("epochs", 60)),
+        "--epochs", str(cfg.get("epochs", 30)),
         "--lr", str(cfg.get("lr", 1e-4)),
         "--batch_size", str(pconf.get("batch", 2)),
         "--num_workers", str(pconf.get("workers", 2)),

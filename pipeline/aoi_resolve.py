@@ -329,6 +329,8 @@ def main() -> None:
     lid_vrt = out_dir / "aoi_lidar.vrt"
     if rgb_vrt.exists():
         rgb_vrt.unlink()
+    if lid_vrt.exists():
+        lid_vrt.unlink()
     rgb_info = write_vrt(tiles, rgb_dir, rgb_vrt, rgb_prefix)
     lid_info = write_vrt(tiles, lid_dir, lid_vrt, lid_prefix)
     print(f"  rgbnir VRT: {rgb_info}")
@@ -337,6 +339,11 @@ def main() -> None:
         raise SystemExit(
             f"[ABORT] falha ao montar aoi_rgbnir.vrt: {rgb_info}. "
             f"Verifique se os .tif do AOI existem em {rgb_dir}."
+        )
+    if not lid_info.get("ok"):
+        print(
+            f"[warn] sem LiDAR em {lid_dir} para tiles {tiles}. "
+            f"Gere com: .\\run_lidar.cmd -aoi {aoi_gpkg.stem} -Engine python -Force"
         )
 
     annot_info = None

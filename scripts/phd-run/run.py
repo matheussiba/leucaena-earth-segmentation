@@ -218,10 +218,12 @@ def phase_resolve(lay: Layout, cfg: dict, aoi: str, runtime: str, dry=False) -> 
     if rc != 0 and not dry:
         sys.exit(f"[ABORT] resolve falhou (rc={rc}).")
     rgb_vrt = out / "aoi_rgbnir.vrt"
+    lid_vrt = out / "aoi_lidar.vrt"
     if not dry:
         if not rgb_vrt.is_file():
             sys.exit(f"[ABORT] resolve nao gerou {rgb_vrt}")
         meta = out / "resolve.json"
+        info = {}
         if meta.is_file():
             try:
                 info = json.loads(meta.read_text(encoding="utf-8"))
@@ -232,11 +234,23 @@ def phase_resolve(lay: Layout, cfg: dict, aoi: str, runtime: str, dry=False) -> 
                     )
             except Exception as exc:  # noqa: BLE001
                 print(f"[warn] nao li resolve.json: {exc}")
+        needs_lidar = bool(cfg.get("latefusion", False)) or int(cfg.get("lidar_channels", 0) or 0) > 0
+        lidar_ok = lid_vrt.is_file() and (info.get("lidar") or {}).get("ok", lid_vrt.is_file())
+        if needs_lidar and not lidar_ok:
+            missing = (info.get("lidar") or {}).get("missing") or info.get("tiles")
+            rasters = lay.tiles / "lidar" / "rasters"
+            sys.exit(
+                f"[ABORT] latefusion precisa de LiDAR, mas aoi_lidar.vrt falhou "
+                f"(missing={missing}).\n"
+                f"        Esperado: {rasters}/<tile>.tif  [CHM, INTENSITY]\n"
+                f"        Gere com: .\\run_lidar.cmd -aoi {aoi} -Engine python -Force\n"
+                f"        Depois rode de novo: .\\run.cmd all ..."
+            )
     return {
         "dataset_id": did,
         "resolve_dir": out,
         "rgbnir_vrt": rgb_vrt,
-        "lidar_vrt": out / "aoi_lidar.vrt",
+        "lidar_vrt": lid_vrt if lid_vrt.is_file() else None,
         "annotations_clip": out / "aoi_annotations.gpkg",
         "masks": lay.datasets / did / "masks",
     }
@@ -253,7 +267,6 @@ def phase_labels(lay, cfg, aoi, res, runtime, dry=False):
         "--img_path", _p(lay, runtime, res["rgbnir_vrt"]),
         "--shp_path", _p(lay, runtime, res["annotations_clip"]),
         "--out_base_dir", _p(lay, runtime, res["masks"]),
-        "--chm_path", _p(lay, runtime, res["lidar_vrt"]),
         "--classes_dist_map"] + [str(c) for c in lab.get("classes_dist_map", [1])] + [
         "--dist_map_as_cluster", str(lab.get("dist_map_as_cluster", True)),
         "--cluster_edge_m", str(lab.get("cluster_edge_m", 10.0)),
@@ -262,6 +275,13 @@ def phase_labels(lay, cfg, aoi, res, runtime, dry=False):
         "--chm_filter_class", str(lab.get("chm_filter_class", 1)),
         "--train_ratio", str(lab.get("train_ratio", 0.8)),
     ]
+    if res.get("lidar_vrt") and Path(res["lidar_vrt"]).is_file():
+        args += ["--chm_path", _p(lay, runtime, res["lidar_vrt"])]
+    elif cfg.get("latefusion"):
+        sys.exit(
+            f"[ABORT] labels com latefusion precisa de aoi_lidar.vrt. "
+            f"Rode: .\\run_lidar.cmd -aoi {aoi} -Engine python -Force"
+        )
     script_rel = "scripts/manet-latefusion-multitask/01_build_labels.py"
     if runtime == "docker":
         return docker_run(lay, cfg.get("_profile", "home"), script_rel, args, dry=dry)

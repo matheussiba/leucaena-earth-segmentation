@@ -101,6 +101,15 @@ def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
         width = src.width
         height = src.height
         crs = src.crs
+    # Ref pode ser .vrt (AOI mosaico): nao da para escrever em VRTSourcedRasterBand.
+    # Forca GeoTIFF na saida (labels/distancia).
+    meta.update({
+        "driver": "GTiff",
+        "compress": "DEFLATE",
+        "tiled": True,
+        "blockxsize": 256,
+        "blockysize": 256,
+    })
 
     print("2. Lendo e preparando o Shapefile...")
     gdf = gpd.read_file(shp_path)

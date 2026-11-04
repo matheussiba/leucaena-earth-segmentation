@@ -44,9 +44,14 @@ Get-Content $envFile | ForEach-Object {
     }
 }
 if (-not $vars.ContainsKey("PHD_RUN_ROOT") -or [string]::IsNullOrWhiteSpace($vars["PHD_RUN_ROOT"])) {
-    throw "PHD_RUN_ROOT ausente no .env"
+    throw "PHD_RUN_ROOT ausente no .env ($envFile)"
 }
 $root = ($vars["PHD_RUN_ROOT"] -replace '/', '\').TrimEnd('\')
+Write-Host "env: $envFile"
+Write-Host "PHD_RUN_ROOT: $root"
+if (-not (Test-Path $root)) {
+    throw "PHD_RUN_ROOT nao existe: $root (ajuste no .env)"
+}
 $Rbin = "Rscript"
 if ($vars.ContainsKey("R_BIN") -and -not [string]::IsNullOrWhiteSpace($vars["R_BIN"])) {
     $Rbin = $vars["R_BIN"].Trim()

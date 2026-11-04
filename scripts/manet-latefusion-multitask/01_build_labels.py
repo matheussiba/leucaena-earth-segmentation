@@ -60,7 +60,7 @@ def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
                               apply_gaussian=True, gaussian_sigma=5, calc_distance=True, seed=42,
                               classes_dist_map=None, dist_map_as_cluster=False,
                               cluster_edge_m=10.0,
-                              chm_path=None, chm_band=1, intensity_band=2, chm_min_m=2.0,
+                              chm_path=None, chm_band=1, intensity_band=2, chm_min_m=4.0,
                               chm_filter_class=1):
     """
     Converte um shapefile em raster de treino e teste baseados em uma imagem de referência.
@@ -435,8 +435,9 @@ if __name__ == "__main__":
                    help='Banda do CHM no raster (1 = primeira).')
     p.add_argument('--intensity_band', type=int, default=2,
                    help='Banda de intensidade para detectar cobertura LiDAR (INT>0).')
-    p.add_argument('--chm_min_m', type=float, default=2.0,
-                   help='Altura minima (m) para manter leucaena / distancia (so com LiDAR).')
+    p.add_argument('--chm_min_m', type=float, default=4.0,
+                   help='Altura minima (m): com LiDAR, classe filtro com CHM<=este valor '
+                        'vira 0 (leucaena tipicamente CHM>4).')
     p.add_argument('--chm_filter_class', type=int, default=1,
                    help='Classe no raster de rotulos a filtrar pelo CHM (1=leucaena).')
     a = p.parse_args()

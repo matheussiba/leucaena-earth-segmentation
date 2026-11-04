@@ -22,7 +22,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 from pipeline.aoi_resolve import (  # noqa: E402
-    NOMENC_FIELDS, build_tile_index, find_rgbnir_dir, resolve_tiles, _split_names,
+    NOMENC_FIELDS, build_optical_pool, find_rgbnir_dir, resolve_tiles, _split_names,
 )
 
 
@@ -62,20 +62,28 @@ def main() -> None:
     root = Path(a.root)
     aoi_gpkg = root / "aois" / f"{a.aoi}.gpkg"
     tiles_dir = root / "tiles"
-    rgb_dir = find_rgbnir_dir(tiles_dir)
     laz_dir = tiles_dir / "lidar" / "raw"
     if not aoi_gpkg.exists():
         raise SystemExit(f"[ABORT] AOI nao encontrado: {aoi_gpkg}")
-    if not any(rgb_dir.glob("*.tif")):
+
+    index, stem_paths = build_optical_pool(tiles_dir)
+    if not stem_paths:
         raise SystemExit(
-            f"[ABORT] nenhum tile optico em {rgb_dir} "
-            f"(esperado tiles/optical/rgbnir/*.tif)."
+            "[ABORT] nenhum tile optico em tiles/optical/rgbnir/ "
+            "nem tiles/rgbnir/ (legado)."
         )
 
-    # rebuild index se a pasta mudou (optical/ vs legado)
-    index = build_tile_index(rgb_dir, tiles_dir / ".tile_index.json", rebuild=True)
-    optical, how = resolve_tiles(aoi_gpkg, index, rgb_dir, a.nomenc_field)
+    optical, how = resolve_tiles(aoi_gpkg, index, None, a.nomenc_field)
+    if not optical:
+        raise SystemExit(
+            "[ABORT] AOI nao resolveu nenhum tile optico. "
+            "Cheque NOMENC_* vs tiles/optical/rgbnir/*.tif."
+        )
     laz = laz_for_tiles(aoi_gpkg, optical, laz_dir)
+    # pasta "representativa" (optical se houver, senao legado)
+    rgb_dir = find_rgbnir_dir(tiles_dir)
+    if optical and optical[0] in stem_paths:
+        rgb_dir = stem_paths[optical[0]].parent
 
     out = {
         "aoi": a.aoi,

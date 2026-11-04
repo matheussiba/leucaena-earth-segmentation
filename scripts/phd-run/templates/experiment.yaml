@@ -37,7 +37,7 @@ labels:
   dist_map_as_cluster: true
   cluster_edge_m: 10.0
   gaussian_sigma: 2
-  chm_min_m: 2.0               # filtra leucaena baixa SO onde ha LiDAR
+  chm_min_m: 4.0               # leucaena so com CHM>4 (SO onde ha LiDAR: CHM<=4 -> classe 0)
   chm_filter_class: 1
   train_ratio: 0.8
 

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import json
 import os
 import subprocess
 import sys
@@ -216,10 +217,25 @@ def phase_resolve(lay: Layout, cfg: dict, aoi: str, runtime: str, dry=False) -> 
     rc = host_run(resolver, args, dry=dry)
     if rc != 0 and not dry:
         sys.exit(f"[ABORT] resolve falhou (rc={rc}).")
+    rgb_vrt = out / "aoi_rgbnir.vrt"
+    if not dry:
+        if not rgb_vrt.is_file():
+            sys.exit(f"[ABORT] resolve nao gerou {rgb_vrt}")
+        meta = out / "resolve.json"
+        if meta.is_file():
+            try:
+                info = json.loads(meta.read_text(encoding="utf-8"))
+                if not (info.get("rgbnir") or {}).get("ok"):
+                    sys.exit(
+                        f"[ABORT] aoi_rgbnir.vrt invalido: {info.get('rgbnir')}. "
+                        "Coloque o tile do AOI em tiles/optical/rgbnir/ e rode de novo."
+                    )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[warn] nao li resolve.json: {exc}")
     return {
         "dataset_id": did,
         "resolve_dir": out,
-        "rgbnir_vrt": out / "aoi_rgbnir.vrt",
+        "rgbnir_vrt": rgb_vrt,
         "lidar_vrt": out / "aoi_lidar.vrt",
         "annotations_clip": out / "aoi_annotations.gpkg",
         "masks": lay.datasets / did / "masks",
@@ -242,7 +258,7 @@ def phase_labels(lay, cfg, aoi, res, runtime, dry=False):
         "--dist_map_as_cluster", str(lab.get("dist_map_as_cluster", True)),
         "--cluster_edge_m", str(lab.get("cluster_edge_m", 10.0)),
         "--gaussian_sigma", str(lab.get("gaussian_sigma", 2)),
-        "--chm_min_m", str(lab.get("chm_min_m", 2.0)),
+        "--chm_min_m", str(lab.get("chm_min_m", 4.0)),
         "--chm_filter_class", str(lab.get("chm_filter_class", 1)),
         "--train_ratio", str(lab.get("train_ratio", 0.8)),
     ]

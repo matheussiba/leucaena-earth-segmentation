@@ -13,7 +13,7 @@ python .\01_build_labels.py `
   --chm_path  "$AOI\lidar\rasters\SF-23-Y-A-IV-4-SO-A.tif" `
   --chm_band 1 `
   --intensity_band 2 `
-  --chm_min_m 2 `
+  --chm_min_m 4 `
   --chm_filter_class 1 `
   --out_base_dir $OUT `
   --train_ratio 0.8 `

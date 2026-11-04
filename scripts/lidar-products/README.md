@@ -66,8 +66,9 @@ cd <repo>   # ex.: C:\Users\CMQ\Documents\MSB\0-GITHUB\leucaena-earth-segmentati
 | | **r** (lidR) | **python** (PDAL / `prep-lidar-scene.py`) |
 |---|---|---|
 | CHM | nuvem normalizada + `lspikefree` | `DSM − DTM` (DTM = min Z por célula) |
-| Buracos / falha de faixa | NA se aresta TIN > `-MaxEdge`; CHM ainda usa `lspikefree` (pode flare) | sem pontos → 0; warp `near`; PDAL `radius=res` |
-| Align ao óptico | `near` | `near` (antes era bilinear) |
+| Buracos / falha de faixa | NA se aresta TIN > `-MaxEdge`; CHM ainda usa `lspikefree` (pode flare) | sem pontos → 0; warp `near`; PDAL binmode |
+| DSM | `lspikefree` nos 1ºs retornos (MDS) / CHM pós-normalização | **1º retorno** (`ReturnNumber==1`) + **p99** por célula |
+| Align ao óptico | `near` | `near` |
 | Velocidade | mais lento (R + nuvem na RAM) | mais rápido (stream PDAL) |
 | Requer R no host | sim | não (só Docker) |
 

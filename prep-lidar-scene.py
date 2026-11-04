@@ -106,18 +106,47 @@ def _laz_bounds(laz: str, in_srs: Optional[int], buffer_m: float) -> tuple[float
     return (b["minx"] - buffer_m, b["maxx"] + buffer_m, b["miny"] - buffer_m, b["maxy"] + buffer_m)
 
 
-def _run_product(laz, out_path, product, res, target_epsg, in_srs, bounds) -> int:
+def _run_product(laz, out_path, product, res, target_epsg, in_srs, bounds,
+                 dsm_stat: str = "p99", log=None) -> int:
     """Rasterise one product over the shared ``bounds`` at ``res`` metres."""
-    pipe = build_single_writer_pipeline(
-        laz_path=laz, out_path=out_path, product=product,
-        resolution_m=res, target_epsg=target_epsg, bounds=bounds, in_srs=in_srs,
-    )
-    n = run_pdal_pipeline(pipe)
-    import gc
-    gc.collect()  # free the C++ point buffer before the next (heavy) product
-    if not os.path.isfile(out_path):
-        raise RuntimeError(f"PDAL finished ({n:,} pts) but did not write {product} -> {out_path}")
-    return int(n)
+    def _go(stat: str) -> int:
+        pipe = build_single_writer_pipeline(
+            laz_path=laz, out_path=out_path, product=product,
+            resolution_m=res, target_epsg=target_epsg, bounds=bounds,
+            in_srs=in_srs, dsm_stat=stat,
+        )
+        n = run_pdal_pipeline(pipe)
+        import gc
+        gc.collect()
+        if not os.path.isfile(out_path):
+            raise RuntimeError(
+                f"PDAL finished ({n:,} pts) but did not write {product} -> {out_path}"
+            )
+        return int(n)
+
+    if product != "dsm":
+        return _go(dsm_stat)
+
+    try:
+        return _go(dsm_stat)
+    except Exception as exc:  # noqa: BLE001
+        # PDAL antigo: sem percentile / binmode → cai no max (ainda 1º retorno)
+        msg = str(exc).lower()
+        want_pct = str(dsm_stat).lower().startswith("p")
+        if want_pct and dsm_stat.lower() != "max" and (
+            "percentile" in msg or "binmode" in msg or "p99" in msg
+            or "output type" in msg or "invalid" in msg
+        ):
+            if log:
+                log(f"  [warn] PDAL sem {dsm_stat} ({type(exc).__name__}: {exc})")
+                log("  [warn] DSM fallback: 1º retorno + max (atualize PDAL p/ p99)")
+            if os.path.isfile(out_path):
+                try:
+                    os.remove(out_path)
+                except OSError:
+                    pass
+            return _go("max")
+        raise
 
 
 def _warp_to_grid(src_path: str, grid: TileGrid, out_path: str, resample: str) -> None:
@@ -197,7 +226,8 @@ def main() -> None:
         log(f"grid        : {grid.width}x{grid.height} px | EPSG:{grid.epsg_code} | px={grid.pixel_size_x:.4f} m")
         log(f"laz tiles   : {len(laz_paths)} | laz_epsg: {laz_epsg}")
         log(f"resolution  : {args.resolution} m (native) | chm_max: {args.chm_max_m} m")
-        log("dtm mode    : cell-wise MIN (no SMRF — avoids WSL OOM / segfault)")
+        log("dsm mode    : 1st return (ReturnNumber==1) + p99 (binmode); fallback max")
+        log("dtm mode    : cell-wise MIN all returns (no SMRF — avoids WSL OOM / segfault)")
 
         tmp_dir = os.path.join(tempfile.gettempdir(), "leucaena_lidar_tmp")
         os.makedirs(tmp_dir, exist_ok=True)
@@ -215,11 +245,14 @@ def main() -> None:
             try:
                 bounds = _laz_bounds(laz, laz_epsg, buffer_m=args.resolution * 2.0)
                 log(f"  bounds={bounds[0]:.1f},{bounds[1]:.1f},{bounds[2]:.1f},{bounds[3]:.1f}")
-                n = _run_product(laz, dsm_p, "dsm", args.resolution, grid.epsg_code, laz_epsg, bounds)
-                log(f"  dsm  ok ({n:,} pts)")
-                _run_product(laz, dtm_p, "dtm", args.resolution, grid.epsg_code, laz_epsg, bounds)
+                n = _run_product(laz, dsm_p, "dsm", args.resolution, grid.epsg_code,
+                                 laz_epsg, bounds, dsm_stat="p99", log=log)
+                log(f"  dsm  ok ({n:,} pts) [1st return + p99]")
+                _run_product(laz, dtm_p, "dtm", args.resolution, grid.epsg_code,
+                             laz_epsg, bounds, log=log)
                 log(f"  dtm  ok")
-                _run_product(laz, int_p, "intensity", args.resolution, grid.epsg_code, laz_epsg, bounds)
+                _run_product(laz, int_p, "intensity", args.resolution, grid.epsg_code,
+                             laz_epsg, bounds, log=log)
                 log(f"  int  ok")
                 compute_chm(dsm_p, dtm_p, chm_p, chm_max_m=args.chm_max_m)
                 log(f"  chm  ok -> {os.path.basename(chm_p)}")

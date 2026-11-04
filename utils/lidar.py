@@ -14,9 +14,10 @@ We do that in three steps:
    using PDAL. PDAL is the de-facto standard for point cloud processing
    and avoids hand-rolled binning. We produce three intermediate GeoTIFFs:
 
-     - ``dsm.tif``     - max Z of all returns (top of canopy / buildings)
-     - ``dtm.tif``     - min Z of ground returns after SMRF classification
-     - ``intensity.tif`` - mean raw intensity of all returns
+     - ``dsm.tif``     - 1st returns only (``ReturnNumber==1``, like lidR),
+       cell-wise **p99** Z (``binmode``; falls back to max if PDAL is old)
+     - ``dtm.tif``     - min Z of all clean returns (no SMRF; memory-safe)
+     - ``intensity.tif`` - mean raw intensity of all clean returns
 
 2. **Compute CHM** = DSM - DTM, clipped to [0, ``LIDAR_CHM_MAX_M``] to
    suppress spikes. Pixels where DSM or DTM are no-data become 0 m (open
@@ -122,16 +123,21 @@ def build_single_writer_pipeline(
     target_epsg: Optional[int],
     bounds: Optional[tuple[float, float, float, float]],
     in_srs: Optional[int] = None,
+    dsm_stat: str = "p99",
 ) -> dict:
     """Build a PDAL pipeline that rasterises ONE product to ``out_path``.
 
-    ``product`` is one of ``"dsm"`` (max Z of clean returns), ``"dtm"`` (min Z
-    of clean returns — no SMRF; memory-safe for ~90 M-point IGC tiles) or
-    ``"intensity"`` (mean raw Intensity). We use one writer per pipeline on
-    purpose: the pdal-python ``Pipeline`` does not reliably flush *multiple*
-    ``writers.gdal`` leaves in a single DAG. ``bounds`` is
-    ``(xmin, xmax, ymin, ymax)`` in ``target_epsg``. ``in_srs`` (EPSG) is set
-    as ``readers.las`` default_srs for LAZ files without an embedded CRS.
+    ``product``:
+      - ``"dsm"``: 1st returns only (``ReturnNumber==1``, like lidR MDS),
+        cell statistic ``dsm_stat`` (default ``p99``; requires PDAL with
+        percentile + ``binmode``; use ``max`` as fallback).
+      - ``"dtm"``: min Z of all clean returns (no SMRF; memory-safe).
+      - ``"intensity"``: mean raw Intensity of all clean returns.
+
+    One writer per pipeline (pdal-python does not reliably flush multiple
+    ``writers.gdal`` leaves). ``bounds`` = ``(xmin, xmax, ymin, ymax)`` in
+    ``target_epsg``. ``in_srs`` sets ``readers.las`` default_srs when the LAZ
+    has no embedded CRS.
     """
     if product not in ("dsm", "dtm", "intensity"):
         raise ValueError(f"Unknown product: {product!r}")
@@ -169,19 +175,31 @@ def build_single_writer_pipeline(
     writer_input = "src_clean"
     output_type = "max"
     dimension: Optional[str] = None
+    binmode = False
 
     if product == "intensity":
         output_type = "mean"
         dimension = "Intensity"
     elif product == "dtm":
-        # NO SMRF. filters.smrf loads ~90 M points into RAM and segfaults WSL
-        # even after thinning (thinning still requires the full load first).
-        # For the canopy-height gate (CHM = DSM - DTM, threshold ~3 m) a
-        # cell-wise MIN of clean returns is enough and memory-safe: same
-        # pipeline shape as DSM, just output_type=min. IGC tiles also have
-        # broken ReturnNumber=0, so we avoid filters.returns here too.
+        # NO SMRF. filters.smrf loads ~90 M points into RAM and segfaults WSL.
+        # Cell-wise MIN of clean returns is enough for CHM = DSM - DTM.
+        # Keep all return numbers (ground often last/only).
         writer_input = "src_clean"
         output_type = "min"
+    elif product == "dsm":
+        # Como o R (MDS): so 1º retorno. ReturnNumber==1 cobre first-of-many
+        # e only-return (NumberOfReturns==1 → RN tipicamente 1).
+        stages.append({
+            "type": "filters.range",
+            "inputs": "src_clean",
+            "limits": "ReturnNumber[1:1]",
+            "tag": "src_first",
+        })
+        writer_input = "src_first"
+        output_type = str(dsm_stat).strip().lower() or "p99"
+        # Percentis (p99) so existem em binmode (pontos dentro do pixel).
+        if output_type.startswith("p") and output_type[1:].isdigit():
+            binmode = True
 
     writer: dict = {
         "type": "writers.gdal",
@@ -192,11 +210,14 @@ def build_single_writer_pipeline(
         "data_type": "float32",
         "nodata": -9999.0,
         "resolution": float(resolution_m),
-        # radius = res: ponto so entra na celula (e vizinha imediata na borda).
-        # Antes era 1.5*res e "vazava" max/min para celulas sem ponto (flare leve).
-        "radius": float(resolution_m),
         "output_type": output_type,
     }
+    if binmode:
+        # binmode: so pontos dentro do pixel; radius nao se aplica
+        writer["binmode"] = True
+    else:
+        # radius = res: evita vazamento de max/min para celulas vizinhas
+        writer["radius"] = float(resolution_m)
     if dimension is not None:
         writer["dimension"] = dimension
     if bounds is not None:

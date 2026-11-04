@@ -5,6 +5,30 @@ Um motor (`02_train.py --arch ...`) para todas as redes, configurado por
 
 Wrappers na **raiz do repo**: `run.ps1` / `run.cmd` (preferir `.cmd` no lab).
 
+## PowerShell (lab / home)
+
+Rode **sempre no PowerShell** a partir da raiz do repo. No lab a ExecutionPolicy
+costuma bloquear `.ps1` e o Windows pode abrir o arquivo no editor — use o `.cmd`
+(ou Bypass explícito):
+
+```powershell
+cd C:\Users\CMQ\Documents\MSB\0-GITHUB\leucaena-earth-segmentation   # lab
+# cd <seu-clone>                                                      # home
+
+# Preferido no lab:
+.\run.cmd labels -aoi 261002-riodaspedras -experiment manet/latefusion-multitask -run run-001
+
+# Se precisar chamar o .ps1 direto:
+powershell -NoProfile -ExecutionPolicy Bypass -File .\run.ps1 labels -aoi 261002-riodaspedras -experiment manet/latefusion-multitask -run run-001
+```
+
+Ordem típica depois do LiDAR pronto (`.\run_lidar.cmd -aoi ...`):
+
+1. `.\run.cmd labels  ... -run run-001`
+2. `.\run.cmd train   ... -run run-001`
+3. `.\run.cmd predict ... -run run-001`
+4. `.\run.cmd post    ... -run run-001`
+
 ## .env (por PC)
 
 ```dotenv
@@ -92,3 +116,29 @@ Mounts: `/data/tiles`, `/data/aois`, `/data/annotations`, `/data/datasets`, `/da
 | `resunet/latefusion` | resunet | classification |
 
 Templates YAML: `scripts/phd-run/templates/`.
+
+## Debug (labels / train)
+
+### `Writing through VRTSourcedRasterBand is not supported`
+
+Causa: o `01_build_labels.py` lia o mosaico AOI (`.vrt`) e copiava `driver=VRT`
+para a saída. GDAL não grava em VRT.
+
+Fix (já no repo): saídas de label/distância forçadas para **GeoTIFF**.
+Atualize e rode de novo:
+
+```powershell
+git pull
+.\run.cmd labels -aoi 261002-riodaspedras -experiment manet/latefusion-multitask -run run-001
+```
+
+### Warning `More than one layer found in 'annotations.gpkg'`
+
+Inofensivo se a layer default for `annotations`. O resolve usa essa layer.
+
+### Docker / imagem
+
+```powershell
+docker images leucaena-segmentation:cuda
+# engine running basta; o runner sobe o container sozinho
+```

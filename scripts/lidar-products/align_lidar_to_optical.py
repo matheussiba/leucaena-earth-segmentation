@@ -171,7 +171,8 @@ def main():
         laz_epsg = a.laz_epsg if a.laz_epsg is not None else grid.epsg_code
         print(f"ALINHANDO ao optico: {grid.width}x{grid.height} EPSG:{grid.epsg_code}")
         chm_grid = os.path.join(tmp, "chm_grid.tif")
-        _warp(chm_vrt, grid, chm_grid, "bilinear")
+        # near (nao bilinear): evita espalhar CHM inventado para dentro de gaps
+        _warp(chm_vrt, grid, chm_grid, "near")
     else:
         print("SEM optico: mantendo CHM na grade nativa do LiDAR.")
         chm_grid = os.path.join(tmp, "chm_native.tif")

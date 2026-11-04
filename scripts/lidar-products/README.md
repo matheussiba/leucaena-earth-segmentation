@@ -96,15 +96,27 @@ PHD_RUN_ROOT/
       rasters/<tile>.tif                 # saida final [CHM, INTENSITY]
 ```
 
-### Buracos no MDT (tile sem pontos de solo)
+### Buracos / falha de faixa (como no PDAL antigo)
 
-Se ~¼ da cena não tem classe 2, o `normalize_height` padrão do `lidR` tenta
-**IDW** e pode demorar horas. O script **ignora** esses pontos (extract
-bilinear do MDT; onde é NA, o ponto não entra no CHM). O buraco fica sem
-altura (CHM=0) — melhor do que interpolar terreno fantasma e travar o R.
+Sem limite, o TIN do `lidR` **triangula através do vazio** (faixas vermelhas no
+CHM + overshoot amarelo na borda, cotas falsas ~dezenas de m).
 
-Se um LAZ ficou pela metade (só MDT/MDS, sem CHM), rode de novo com `-Force`
-depois de atualizar o script (`git pull`).
+Correção (default):
+- **`tin(max_edge=50)`** (`-MaxEdge 50`): arestas > 50 m não existem → buraco = NA
+- extract **nearest** do MDT (não bilinear na borda do buraco)
+- celulas CHM sem ponto = **0** (não inventa altura)
+- align ao óptico com resample **near** (não bilinear)
+
+```powershell
+.\run_lidar.cmd -aoi 261002-riodaspedras -Force              # MaxEdge=50 default
+.\run_lidar.cmd -aoi 261002-riodaspedras -Force -MaxEdge 30  # mais estrito
+```
+
+Também: se ~¼ da cena sem classe 2, **não** usamos `normalize_height` com IDW
+(demora horas); pontos sem MDT são ignorados.
+
+Se produtos antigos (com TIN sem `max_edge`) ainda estão em `products/`,
+**obrigatório** `-Force` depois do `git pull`.
 
 ### Paralelismo (vários LAZ)
 

@@ -5,16 +5,20 @@
 # Passo 1 do orquestrador (abordagem C): gera MDT, MDS e CHM por arquivo .laz
 # usando lidR (ground CSF/classe 2 + lspikefree).
 #
-#   - MDT: pontos de solo (classe 2) -> TIN
-#   - CHM: extract bilinear do MDT (buracos NA ignorados, SEM IDW), ruido, lspikefree()
+#   - MDT: pontos de solo (classe 2) -> TIN com max_edge (NAO triangula buracoes)
+#   - CHM: extract nearest do MDT (buracos NA ignorados, SEM IDW), ruido, lspikefree()
 #   - MDS: opcional (--mds); nao e usado no treino late-fusion
+#
+# Buracos (lagoa / falha de faixa): tin(max_edge) deixa NA como o PDAL antigo;
+# sem max_edge o TIN cria faixas/overshoot atraves do vazio.
 #
 # Paralelismo: --workers N processa N LAZ ao mesmo tempo (PSOCK). Threads do
 # lidR por worker = floor(--threads / --workers) para nao estourar a CPU.
 #
 # Uso:
 #   Rscript make_lidar_products.R --laz-dir <raw> --out-dir <products> \
-#       [--names a,b,c] [--res 0.5] [--chm-max 120] [--workers 4] [--threads 12] [--force]
+#       [--names a,b,c] [--res 0.5] [--max-edge 50] [--chm-max 120] \
+#       [--workers 4] [--threads 12] [--force]
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -25,6 +29,7 @@ suppressPackageStartupMessages({
 parse_args <- function(args) {
   out <- list(
     laz_dir = NULL, out_dir = NULL, res = 0.5, chm_max = 120,
+    max_edge = 50,  # m; 0 = sem limite (ruim: preenche buracoes)
     threads = 12, workers = 4, force = FALSE, ground_class_only = TRUE,
     names = NULL, mds = FALSE
   )
@@ -35,6 +40,9 @@ parse_args <- function(args) {
     else if (a == "--out-dir") { out$out_dir <- args[[i + 1]]; i <- i + 2 }
     else if (a == "--res") {
       out$res <- as.numeric(sub(",", ".", args[[i + 1]], fixed = TRUE)); i <- i + 2
+    }
+    else if (a == "--max-edge") {
+      out$max_edge <- as.numeric(sub(",", ".", args[[i + 1]], fixed = TRUE)); i <- i + 2
     }
     else if (a == "--chm-max") { out$chm_max <- as.numeric(args[[i + 1]]); i <- i + 2 }
     else if (a == "--threads") { out$threads <- as.integer(args[[i + 1]]); i <- i + 2 }
@@ -50,7 +58,7 @@ parse_args <- function(args) {
 
 # ---- um LAZ -----------------------------------------------------------------
 process_one_laz <- function(caminho_laz, out_dir, res, chm_max, force, use_csf,
-                            threads_per_worker, do_mds = FALSE) {
+                            threads_per_worker, do_mds = FALSE, max_edge = 50) {
   set_lidr_threads(threads_per_worker)
   options(lidR.check.nested = FALSE)
 
@@ -66,8 +74,8 @@ process_one_laz <- function(caminho_laz, out_dir, res, chm_max, force, use_csf,
   }
 
   t0 <- Sys.time()
-  message(sprintf("\n[WORKER] PROCESSANDO: %s (lidR threads=%d)",
-                  basename(caminho_laz), threads_per_worker))
+  message(sprintf("\n[WORKER] PROCESSANDO: %s (lidR threads=%d, max_edge=%g m)",
+                  basename(caminho_laz), threads_per_worker, max_edge))
 
   las <- readLAS(caminho_laz, select = "xyzcr", filter = "-drop_z_below 0")
   if (is.empty(las)) {
@@ -79,12 +87,16 @@ process_one_laz <- function(caminho_laz, out_dir, res, chm_max, force, use_csf,
     las <- classify_ground(las, algorithm = csf())
   }
 
-  message("  -> MDT...")
+  # MDT: TIN com aresta maxima — buracoes (lagoa / falha de faixa) ficam NA,
+  # como no PDAL antigo. Sem max_edge o TIN inventa terreno atraves do vazio
+  # (faixas vermelhas + overshoot amarelo na borda).
+  message("  -> MDT (TIN max_edge=", max_edge, " m)...")
   las_ground <- filter_poi(las, Classification == 2L)
   dtm <- NULL
   if (npoints(las_ground) > 0) {
-    dtm <- rasterize_terrain(las_ground, res = res, algorithm = tin())
-    terra::writeRaster(dtm, nome_mdt, overwrite = TRUE)
+    tin_algo <- if (is.finite(max_edge) && max_edge > 0) tin(max_edge = max_edge) else tin()
+    dtm <- rasterize_terrain(las_ground, res = res, algorithm = tin_algo)
+    terra::writeRaster(dtm, nome_mdt, overwrite = TRUE, NAflag = -9999)
   } else {
     warning("  -> Sem pontos de solo (classe 2); MDT nao gerado.")
   }
@@ -93,13 +105,14 @@ process_one_laz <- function(caminho_laz, out_dir, res, chm_max, force, use_csf,
     message("  -> MDS (lspikefree)...")
     las_first <- filter_poi(las, ReturnNumber == 1L)
     dsm <- rasterize_canopy(las_first, res = res, algorithm = lspikefree())
-    terra::writeRaster(dsm, nome_mds, overwrite = TRUE)
+    terra::writeRaster(dsm, nome_mds, overwrite = TRUE, NAflag = -9999)
     rm(las_first, dsm)
   }
 
   if (!is.null(dtm)) {
-    message("  -> Normalizando nuvem pelo MDT (sem IDW; ignora buracos)...")
-    z0 <- as.numeric(terra::extract(dtm, cbind(las$X, las$Y), method = "bilinear")[, 1])
+    message("  -> Normalizando nuvem pelo MDT (nearest; ignora NA / buracos)...")
+    # simple = celula mais proxima (nao interpola NA da borda do buraco)
+    z0 <- as.numeric(terra::extract(dtm, cbind(las$X, las$Y), method = "simple")[, 1])
     n_tot <- length(z0)
     n_na <- sum(is.na(z0) | !is.finite(z0))
     message(sprintf("     MDT valido: %s / %s pontos (buraco ignorado: %.1f%%)",
@@ -114,8 +127,9 @@ process_one_laz <- function(caminho_laz, out_dir, res, chm_max, force, use_csf,
       las_norm <- classify_noise(las_norm, ivf(res = 5, n = 6))
       las_norm <- filter_poi(las_norm, Classification != LASNOISE & Z >= 0 & Z <= chm_max)
       if (!is.empty(las_norm) && npoints(las_norm) > 0) {
-        message("  -> CHM (lspikefree)...")
+        message("  -> CHM (lspikefree; celulas sem ponto = 0)...")
         chm <- rasterize_canopy(las_norm, res = res, algorithm = lspikefree())
+        # Sem pontos = NA -> 0 (igual PDAL: gap sem inventar altura)
         chm[is.na(chm) | chm < 0] <- 0
         terra::writeRaster(chm, nome_chm, overwrite = TRUE)
         rm(chm)
@@ -166,8 +180,8 @@ workers <- max(1L, min(as.integer(a$workers), n_laz))
 threads_per <- max(1L, as.integer(floor(a$threads / workers)))
 
 message(">>> ", n_laz, " arquivo(s) .laz | res=", a$res,
-        " m | chm_max=", a$chm_max, " m | ground=",
-        if (use_csf) "CSF" else "classe2",
+        " m | max_edge=", a$max_edge, " m | chm_max=", a$chm_max,
+        " m | ground=", if (use_csf) "CSF" else "classe2",
         " | mds=", a$mds,
         " | workers=", workers, " | lidR_threads/worker=", threads_per,
         " | out=", a$out_dir)
@@ -178,7 +192,8 @@ if (workers <= 1L) {
   results <- lapply(lista_laz, process_one_laz,
                     out_dir = a$out_dir, res = a$res, chm_max = a$chm_max,
                     force = a$force, use_csf = use_csf,
-                    threads_per_worker = threads_per, do_mds = a$mds)
+                    threads_per_worker = threads_per, do_mds = a$mds,
+                    max_edge = a$max_edge)
 } else {
   # Windows: PSOCK. Cada worker carrega lidR/terra e processa 1+ LAZ.
   cl <- parallel::makeCluster(workers, outfile = "")
@@ -200,7 +215,8 @@ if (workers <= 1L) {
   results <- parallel::parLapply(cl, lista_laz, process_one_laz,
                                  out_dir = a$out_dir, res = a$res, chm_max = a$chm_max,
                                  force = a$force, use_csf = use_csf,
-                                 threads_per_worker = threads_per, do_mds = a$mds)
+                                 threads_per_worker = threads_per, do_mds = a$mds,
+                                 max_edge = a$max_edge)
   parallel::stopCluster(cl)
   on.exit(NULL)
 }

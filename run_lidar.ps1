@@ -11,6 +11,7 @@ param(
     [switch]$NoIntensity,
     [double]$Res = 0.5,
     [double]$ChmMax = 120,
+    [double]$MaxEdge = 50,
     [int]$Workers = 4,
     [int]$Threads = 12
 )

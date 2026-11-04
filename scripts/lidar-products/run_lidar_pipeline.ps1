@@ -22,6 +22,7 @@ param(
     [switch]$NoIntensity,
     [double]$Res = 0.5,
     [double]$ChmMax = 120,
+    [double]$MaxEdge = 50,  # m; TIN nao triangula arestas maiores (buracos ficam NA)
     [int]$Workers = 4,   # LAZ em paralelo (R); threads lidR = Threads/Workers
     [int]$Threads = 12   # total de threads lidR a repartir entre workers
 )
@@ -69,7 +70,7 @@ Write-Host "AOI: $aoi | via $($info.resolved_via)"
 Write-Host "  optical ($($optical.Count)): $($optical -join ', ')"
 Write-Host "  laz     ($($lazStems.Count)): $($lazStems -join ', ')"
 Write-Host "Mode: $Mode | Force=$Force | NoOptical=$NoOptical | NoIntensity=$NoIntensity"
-Write-Host "Workers=$Workers | Threads=$Threads (lidR por worker ~= Threads/Workers)"
+Write-Host "Workers=$Workers | Threads=$Threads | MaxEdge=$MaxEdge m (TIN)"
 Write-Host "R: $Rbin"
 
 New-Item -ItemType Directory -Force -Path $PROD_HOST, $RAS_HOST | Out-Null
@@ -95,6 +96,7 @@ if ($Mode -eq "products" -or $Mode -eq "all") {
                    "--out-dir", $PROD_HOST,
                    "--names", $lazNamesCsv,
                    "--res", ("{0}" -f $Res).Replace(",", "."),
+                   "--max-edge", ("{0}" -f $MaxEdge).Replace(",", "."),
                    "--chm-max", $ChmMax,
                    "--workers", $Workers,
                    "--threads", $Threads)

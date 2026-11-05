@@ -184,11 +184,13 @@ def aoi_mask_path(lay: Layout, aoi: str, cfg: dict, *,
         if not p.is_file():
             sys.exit(f"[ABORT] mask nao encontrada: {p}")
         return p
-    cand = lay.aois / f"{aoi}-mask.gpkg"
-    if not cand.is_file():
+    from pipeline.aoi_resolve import find_aoi_mask  # noqa: PLC0415
+    cand = find_aoi_mask(lay.aois, aoi, None)
+    if cand is None:
         sys.exit(
-            f"[ABORT] -mask pedido mas nao existe {cand}\n"
-            f"        Coloque aois/{aoi}-mask.gpkg ou use -mask-gpkg PATH"
+            f"[ABORT] -mask pedido mas nao existe aois/{aoi}-mask.gpkg "
+            f"(nem .geojson/.shp)\n"
+            f"        Exporte no QGIS como GeoPackage ou use -mask-gpkg PATH"
         )
     return cand
 

@@ -250,22 +250,75 @@ def write_vrt(stems: list[str], src_dir: Path, out_vrt: Path,
 # ---------------------------------------------------------------------------
 # Mask / recorte
 # ---------------------------------------------------------------------------
+_MASK_EXTS = (".gpkg", ".geojson", ".json", ".shp")
+
+
 def find_aoi_mask(aois_dir: Path, aoi: str, explicit: Path | None = None) -> Path | None:
-    """aois/<aoi>-mask.gpkg (ou caminho explicito)."""
+    """aois/<aoi>-mask.{gpkg,geojson,shp} (ou caminho explicito)."""
     if explicit is not None:
         p = Path(explicit)
         return p if p.is_file() else None
     if not aoi:
         return None
-    cand = Path(aois_dir) / f"{aoi}-mask.gpkg"
-    return cand if cand.is_file() else None
+    base = Path(aois_dir) / f"{aoi}-mask"
+    for ext in _MASK_EXTS:
+        cand = Path(str(base) + ext)
+        if cand.is_file():
+            return cand
+    return None
+
+
+def read_vector(path: Path):
+    """Le vetor (GPKG/GeoJSON/SHP) com mensagem clara se o arquivo for invalido."""
+    import geopandas as gpd
+
+    path = Path(path)
+    if not path.is_file():
+        raise SystemExit(f"[ABORT] vetor nao encontrado: {path}")
+    size = path.stat().st_size
+    if size < 64:
+        raise SystemExit(
+            f"[ABORT] arquivo muito pequeno/vazio ({size} bytes): {path}\n"
+            f"        Exporte de novo no QGIS: botao direito na layer → Export → "
+            f"Save Features As → Format=GeoPackage."
+        )
+    last_err: Exception | None = None
+    # 1) pyogrio default  2) fiona  3) GPKG: prefix (Windows path quirks)
+    attempts = [
+        {},
+        {"engine": "fiona"},
+        {"engine": "pyogrio"},
+    ]
+    for kwargs in attempts:
+        try:
+            gdf = gpd.read_file(path, **kwargs)
+            if gdf is not None and len(gdf) >= 0:
+                return gdf
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+    # prefixo DRIVER: (ajuda em alguns builds GDAL no Windows)
+    for prefix in ("GPKG:", "GeoJSON:", "ESRI Shapefile:"):
+        try:
+            return gpd.read_file(f"{prefix}{path}")
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+    raise SystemExit(
+        f"[ABORT] nao consegui ler a mask como vetor GIS: {path}\n"
+        f"        Erro: {type(last_err).__name__}: {last_err}\n"
+        f"        O arquivo existe mas NAO e um GeoPackage/GeoJSON/Shapefile valido "
+        f"(extensao .gpkg com conteudo errado e comum).\n"
+        f"        No QGIS: abra o poligono → Export → Save Features As → "
+        f"Format = GeoPackage → salve como:\n"
+        f"          aois/<aoi>-mask.gpkg\n"
+        f"        Confira depois:  (Get-Item '...-mask.gpkg').Length"
+    )
 
 
 def clip_annotations(annot_path: Path, clip_gpkg: Path, out_path: Path) -> dict:
     import geopandas as gpd
 
-    clip = gpd.read_file(clip_gpkg)
-    ann = gpd.read_file(annot_path)
+    clip = read_vector(clip_gpkg)
+    ann = read_vector(annot_path)
     if ann.crs != clip.crs:
         clip = clip.to_crs(ann.crs)
     clip_union = clip.geometry.union_all() if hasattr(clip.geometry, "union_all") \
@@ -280,10 +333,9 @@ def clip_annotations(annot_path: Path, clip_gpkg: Path, out_path: Path) -> dict:
 def crop_raster_to_mask(src_path: Path, mask_gpkg: Path, out_path: Path,
                         nodata_fill: float = 0.0) -> dict:
     """Recorta raster/VRT ao poligono da mask (crop=True); fora = nodata_fill."""
-    import geopandas as gpd
     from rasterio.mask import mask as rio_mask
 
-    gdf = gpd.read_file(mask_gpkg)
+    gdf = read_vector(mask_gpkg)
     if gdf.empty or gdf.geometry.is_empty.all():
         raise SystemExit(f"[ABORT] mask vazia: {mask_gpkg}")
 

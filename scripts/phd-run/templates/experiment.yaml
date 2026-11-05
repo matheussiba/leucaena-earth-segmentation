@@ -29,8 +29,7 @@ output_crs: EPSG:31983
 
 # annotations: 261030-classes.gpkg   # opcional; default = unico .gpkg em annotations/
 # nomenc_field: NOMENC_10K            # opcional; default = auto-detecta
-# use_aoi_mask: true                  # default: se existir aois/<aoi>-mask.gpkg, recorta
-# mask_gpkg: 261002-riodaspedras-mask.gpkg   # opcional (sob aois/ ou path absoluto)
+# mask: use a flag -mask no run.cmd (aois/<aoi>-mask.gpkg); opcional -mask-gpkg PATH
 
 # proc 1 (rotulos)
 labels:

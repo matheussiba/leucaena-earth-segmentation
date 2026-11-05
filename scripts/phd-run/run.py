@@ -165,18 +165,32 @@ def dataset_id(aoi: str, cfg: dict, masked: bool = False) -> str:
     return did
 
 
-def aoi_mask_path(lay: Layout, aoi: str, cfg: dict) -> Path | None:
-    """aois/<aoi>-mask.gpkg se existir (ou cfg mask_gpkg); None se use_aoi_mask:false."""
-    if cfg.get("use_aoi_mask") is False:
+def aoi_mask_path(lay: Layout, aoi: str, cfg: dict, *,
+                  want_mask: bool = False,
+                  mask_gpkg_cli: str | None = None) -> Path | None:
+    """Resolve mask so sob pedido explicito (-mask / -mask-gpkg).
+
+    Nome: aois/<aoi>-mask.gpkg  (ex.: -aoi 261002-riodaspedras
+    → aois/261002-riodaspedras-mask.gpkg). Outro AOI = outro arquivo.
+    Sem -mask, nao recorta mesmo se o arquivo existir.
+    """
+    if not want_mask and not mask_gpkg_cli and not cfg.get("mask_gpkg"):
         return None
-    explicit = cfg.get("mask_gpkg") or cfg.get("aoi_mask")
+    explicit = mask_gpkg_cli or cfg.get("mask_gpkg") or cfg.get("aoi_mask")
     if explicit:
         p = Path(explicit)
         if not p.is_absolute():
             p = lay.aois / p
-        return p if p.is_file() else None
+        if not p.is_file():
+            sys.exit(f"[ABORT] mask nao encontrada: {p}")
+        return p
     cand = lay.aois / f"{aoi}-mask.gpkg"
-    return cand if cand.is_file() else None
+    if not cand.is_file():
+        sys.exit(
+            f"[ABORT] -mask pedido mas nao existe {cand}\n"
+            f"        Coloque aois/{aoi}-mask.gpkg ou use -mask-gpkg PATH"
+        )
+    return cand
 
 
 def annotations_path(lay: Layout, cfg: dict) -> Path | None:
@@ -241,7 +255,9 @@ def _resolve_raster(out: Path, stem: str) -> Path | None:
 
 
 def phase_resolve(lay: Layout, cfg: dict, aoi: str, runtime: str, dry=False) -> dict:
-    mask_p = aoi_mask_path(lay, aoi, cfg)
+    want_mask = bool(cfg.get("_use_mask"))
+    mask_cli = cfg.get("_mask_gpkg")
+    mask_p = aoi_mask_path(lay, aoi, cfg, want_mask=want_mask, mask_gpkg_cli=mask_cli)
     did = dataset_id(aoi, cfg, masked=mask_p is not None)
     out = lay.datasets / did / "_resolve"
     annot = annotations_path(lay, cfg)
@@ -256,7 +272,7 @@ def phase_resolve(lay: Layout, cfg: dict, aoi: str, runtime: str, dry=False) -> 
         args += ["--nomenc-field", nf]
     if mask_p is not None:
         args += ["--mask-gpkg", str(mask_p)]
-    elif cfg.get("use_aoi_mask") is False:
+    else:
         args += ["--no-mask"]
     needs_lidar = bool(cfg.get("latefusion", False)) or int(cfg.get("lidar_channels", 0) or 0) > 0
     if needs_lidar:
@@ -472,6 +488,11 @@ def main():
                     help="reprocessa LiDAR mesmo se rasters ja existirem")
     ap.add_argument("--skip-lidar", dest="skip_lidar", action="store_true",
                     help="no 'all', nao roda o passo lidar (assume rasters prontos)")
+    ap.add_argument("-mask", dest="use_mask", action="store_true",
+                    help="Recorta aois/<aoi>-mask.gpkg (dataset ...__mask). "
+                         "Sem esta flag, nao usa mask mesmo se o arquivo existir.")
+    ap.add_argument("-mask-gpkg", dest="mask_gpkg", default=None,
+                    help="Path da mask (implica -mask). Relativo a aois/ ou absoluto.")
     ap.add_argument("--init-from", dest="init_from", default=None,
                     help="caminho de pesos p/ finetune (grava parent/init_from no run.yaml)")
     ap.add_argument("--parent-run", dest="parent_run", default=None)
@@ -507,6 +528,9 @@ def main():
     cfg["_profile"] = profile
     if a.init_from:
         cfg["_init_from"] = a.init_from
+    cfg["_use_mask"] = bool(a.use_mask or a.mask_gpkg)
+    if a.mask_gpkg:
+        cfg["_mask_gpkg"] = a.mask_gpkg
     if not a.aoi:
         sys.exit("[ABORT] -aoi <nome> e obrigatorio.")
 

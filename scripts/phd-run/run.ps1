@@ -1,9 +1,8 @@
 # run.ps1 - wrapper PowerShell do orquestrador (comandos em minusculo).
 #
 # Exemplos:
-#   .\run.ps1 all     -aoi 261002-riodaspedras -experiment manet/latefusion-multitask -run run-001
-#   .\run.ps1 train   -aoi 261002-riodaspedras -experiment manet/latefusion-multitask -run run-001
-#   .\run.ps1 predict -aoi 260515-piracicaba   -experiment manet/latefusion-multitask -run run-001
+#   .\run.ps1 all -aoi 261002-riodaspedras -experiment manet/latefusion-multitask -run run-001
+#   .\run.ps1 all -aoi 261002-riodaspedras -experiment manet/latefusion-multitask -run run-001 -mask
 #   .\run.ps1 report
 param(
     [Parameter(Mandatory = $true, Position = 0)]
@@ -18,6 +17,8 @@ param(
     [string]$root,
     [string]$initFrom,
     [string]$parentRun,
+    [string]$maskGpkg,
+    [switch]$mask,
     [switch]$forceLidar,
     [switch]$skipLidar,
     [switch]$dryRun
@@ -35,6 +36,8 @@ if ($lidarEngine) { $args += @("-lidar-engine", $lidarEngine) }
 if ($root)        { $args += @("-root", $root) }
 if ($initFrom)    { $args += @("--init-from", $initFrom) }
 if ($parentRun)   { $args += @("--parent-run", $parentRun) }
+if ($mask)        { $args += @("-mask") }
+if ($maskGpkg)    { $args += @("-mask-gpkg", $maskGpkg) }
 if ($forceLidar)  { $args += @("--force-lidar") }
 if ($skipLidar)   { $args += @("--skip-lidar") }
 if ($dryRun)      { $args += @("--dry-run") }

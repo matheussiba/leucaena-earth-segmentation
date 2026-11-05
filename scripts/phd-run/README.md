@@ -47,12 +47,21 @@ R_BIN=C:/Program Files/R/R-4.6.1/bin/Rscript.exe
 
 ## Mask de AOI (treino mais rapido / sem buraco)
 
-Se existir `aois/<aoi>-mask.gpkg` (ex.: `261002-riodaspedras-mask.gpkg`), o
-**resolve** recorta optico + LiDAR + annotations a esse poligono e grava
-`aoi_rgbnir.tif` / `aoi_lidar.tif` sob
-`datasets/<aoi>__lbl-v1__mask/_resolve/`.
+So ativa com **`-mask`** (nao e automatico):
 
-Desligar: `use_aoi_mask: false` no `experiment.yaml`.
+```powershell
+# AOI full (sem mask)
+.\run.cmd all -aoi 261002-riodaspedras -experiment manet/latefusion-multitask -run run-001
+
+# AOI recortado: le aois/261002-riodaspedras-mask.gpkg
+.\run.cmd all -aoi 261002-riodaspedras -experiment manet/latefusion-multitask -run run-001 -mask
+```
+
+O arquivo e sempre `aois/<nome-do-aoi>-mask.gpkg`. Se mudar `-aoi foo`,
+procura `aois/foo-mask.gpkg` — nao reutiliza a mask de outro AOI.
+
+Dataset separado: `datasets/<aoi>__lbl-v1__mask/`.
+Path explicito: `-mask-gpkg caminho.gpkg`.
 
 ## Antes do treino: LiDAR do AOI
 

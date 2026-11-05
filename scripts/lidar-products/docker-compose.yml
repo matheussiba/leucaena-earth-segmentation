@@ -3,6 +3,7 @@
 services:
   lidar-align:
     image: leucaena-segmentation:cuda
+    pull_policy: never
     working_dir: /workspace
     volumes:
       - ../..:/workspace

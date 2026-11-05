@@ -6,6 +6,8 @@
 services:
   phd-run:
     image: leucaena-segmentation:cuda
+    # Imagem local (docker build -t leucaena-segmentation:cuda .). Nunca puxar do Hub.
+    pull_policy: never
     working_dir: /workspace
     shm_size: "${DOCKER_SHM_SIZE:-8gb}"
     volumes:

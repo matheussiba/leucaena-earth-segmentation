@@ -121,8 +121,29 @@ def _run(cmd, cwd=None, dry=False):
     return subprocess.call(cmd, cwd=str(cwd) if cwd else None)
 
 
+def _ensure_local_cuda_image() -> None:
+    """Garante imagem local leucaena-segmentation:cuda (nao puxa do Hub)."""
+    tip = (
+        "Imagem Docker local ausente: leucaena-segmentation:cuda\n"
+        "  Na raiz do repo, com Docker Desktop ligado:\n"
+        "    docker build -t leucaena-segmentation:cuda .\n"
+        "  Depois rode de novo o .\\run.cmd ..."
+    )
+    try:
+        r = subprocess.run(
+            ["docker", "image", "inspect", "leucaena-segmentation:cuda"],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        sys.exit("[ABORT] docker nao encontrado no PATH.\n" + tip)
+    if r.returncode != 0:
+        sys.exit("[ABORT] " + tip)
+
+
 def docker_run(lay: Layout, profile: str, script_rel: str, args: list, dry=False):
     """Roda `python <script_rel> <args>` dentro do container unico."""
+    if not dry:
+        _ensure_local_cuda_image()
     env = os.environ.copy()
     env["TILES_HOST"] = str(lay.tiles)
     env["AOIS_HOST"] = str(lay.aois)

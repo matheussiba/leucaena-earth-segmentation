@@ -500,8 +500,8 @@ def main():
 
     for ph in phases:
         if ph == "lidar":
-            print(f"[lidar] Engine={a.lidar_engine} aoi={a.aoi}")
-        elif ph == "resolve":
+            continue  # ja executado antes do resolve
+        if ph == "resolve":
             print(f"[resolve] dataset_id={res['dataset_id']} -> {res['resolve_dir']}")
         elif ph == "labels":
             if run:

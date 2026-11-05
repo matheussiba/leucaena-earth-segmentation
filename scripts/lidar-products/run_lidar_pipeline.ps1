@@ -2,12 +2,12 @@
 # Orquestrador LiDAR: AOI (NOMENC) -> [CHM, INTENSITY] no pool
 # -----------------------------------------------------------------------------
 # Engines (-Engine):
-#   r       (default) R/lidR (MDT TIN + CHM lspikefree) -> align Docker
-#   python  prep-lidar-scene.py (PDAL DSM-DTM min + INT) via Docker — metodo antigo
+#   python  (default) prep-lidar-scene.py (PDAL: 1st return + p99) via Docker
+#   r       R/lidR (MDT TIN + CHM lspikefree) -> align Docker
 #
 # Exemplo:
 #   .\run_lidar_pipeline.ps1 -aoi 261002-riodaspedras
-#   .\run_lidar_pipeline.ps1 -aoi 261002-riodaspedras -Engine python
+#   .\run_lidar_pipeline.ps1 -aoi 261002-riodaspedras -Engine r
 #   .\run_lidar_pipeline.ps1 -aoi 261002-riodaspedras -Engine r -Mode products
 #
 # .env: PHD_RUN_ROOT, R_BIN (so para -Engine r)
@@ -16,7 +16,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$aoi,
     [ValidateSet("r", "python")]
-    [string]$Engine = "r",
+    [string]$Engine = "python",
     [ValidateSet("all", "products", "align")]
     [string]$Mode = "all",
     [switch]$Force,
@@ -161,7 +161,7 @@ if ($Engine -eq "python") {
 }
 
 # =============================================================================
-# Engine = r  (default): make_lidar_products.R -> align_lidar_to_optical.py
+# Engine = r: make_lidar_products.R -> align_lidar_to_optical.py
 # =============================================================================
 if ($Mode -eq "products" -or $Mode -eq "all") {
     $have = Test-Aoi-R-Products

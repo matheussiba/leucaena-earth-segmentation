@@ -5,8 +5,8 @@ O usuário escolhe o **engine**:
 
 | `-Engine` | O que roda | Quando usar |
 |---|---|---|
-| **`r`** (default) | `make_lidar_products.R` (lidR TIN+lspikefree) → `align_lidar_to_optical.py` | CHM “de laboratório” (TIN com `max_edge`) |
-| **`python`** | `prep-lidar-scene.py` (PDAL: DSM − DTM min + INT) via Docker | Método **antigo** (semana passada): gaps ficam vazios, sem TIN longo |
+| **`python`** (default) | `prep-lidar-scene.py` (PDAL: 1º retorno + p99 DSM − DTM + INT) via Docker | padrão do fluxo PhD / `run all` |
+| **`r`** | `make_lidar_products.R` (lidR TIN+lspikefree) → `align_lidar_to_optical.py` | CHM “de laboratório” (TIN com `max_edge`) |
 
 Os dois escrevem o **mesmo** destino:
 `PHD_RUN_ROOT/tiles/lidar/rasters/<tile>.tif`.
@@ -20,7 +20,7 @@ O AOI (`aois/<aoi>.gpkg`) define os tiles via `NOMENC_2K / NOMENC_5K / NOMENC_10
 | `resolve_aoi_lidar.py` | host | AOI.gpkg → tiles ópticos + stems LAZ (NOMENC) |
 | `make_lidar_products.R` | host (R + lidR) | Engine **r**: MDT + CHM (MDS opcional `--mds`) |
 | `align_lidar_to_optical.py` | Docker | Engine **r**: mosaica CHM R + INT → grade do óptico |
-| `../../prep-lidar-scene.py` | Docker | Engine **python**: PDAL DSM/DTM/INT + warp (método antigo) |
+| `../../prep-lidar-scene.py` | Docker | Engine **python** (default): PDAL 1º retorno + p99 / DTM min + warp |
 | `run_lidar_pipeline.ps1` | host | Orquestra resolve + engine escolhido |
 | `docker-compose.yml` | — | Monta `PHD_RUN_ROOT/tiles` em `/data/tiles` |
 | `../../run_lidar.ps1` / `../../run_lidar.cmd` | raiz do repo | Wrappers (preferir o `.cmd` no lab) |

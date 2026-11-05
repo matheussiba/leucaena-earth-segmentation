@@ -6,13 +6,14 @@ experiment.yaml nomeado, sobre um POOL central de tiles. Cada fase escreve
 timestamps/metricas no run.yaml do run.
 
 Fases:
+  lidar     (opcional) CHM+INT via run_lidar (Engine python por default)
   resolve   AOI.gpkg -> VRT rgbnir + VRT lidar + annotations recortado
   labels    (proc 1) rasteriza rotulos/distancia na grade do AOI
   train     (proc 2) treina o motor on-the-fly lendo os VRTs do AOI
   predict   (proc 3) aplica pesos de um run a um AOI (NAO cria run novo)
   post      (proc 4) pos-processa os rasters de predicao
   report    agrega todos os run.yaml em reports/summary.{md,csv}
-  all       resolve -> labels -> train -> predict -> post
+  all       lidar(python) -> resolve -> labels -> train -> predict -> post
 
 Config:
   .env (por PC)            PHD_RUN_ROOT, TRAIN_PROFILE=home|lab, R_BIN (opcional)
@@ -199,6 +200,21 @@ def stamp(rd: Path, phase: str, field: str, extra: dict | None = None):
 
 
 # --------------------------------------------------------------------------- phases
+def phase_lidar(aoi: str, engine: str = "python", force: bool = False, dry=False) -> int:
+    """Roda run_lidar.ps1 (default Engine=python). Skip se rasters ja existem (sem -Force)."""
+    ps1 = REPO / "run_lidar.ps1"
+    if not ps1.is_file():
+        sys.exit(f"[ABORT] nao encontrado: {ps1}")
+    cmd = [
+        "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-File", str(ps1), "-aoi", aoi, "-Engine", engine,
+    ]
+    if force:
+        cmd.append("-Force")
+    print(f"[lidar] Engine={engine} aoi={aoi}")
+    return _run(cmd, cwd=REPO, dry=dry)
+
+
 def phase_resolve(lay: Layout, cfg: dict, aoi: str, runtime: str, dry=False) -> dict:
     did = dataset_id(aoi, cfg)
     out = lay.datasets / did / "_resolve"
@@ -399,7 +415,7 @@ def phase_post(lay, cfg, aoi, run, runtime, dry=False):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("phase", choices=["resolve", "labels", "train", "predict",
+    ap.add_argument("phase", choices=["lidar", "resolve", "labels", "train", "predict",
                                       "post", "report", "all"])
     ap.add_argument("-aoi", dest="aoi", help="nome do AOI (=> aois/<aoi>.gpkg)")
     ap.add_argument("-experiment", dest="experiment", help="<rede>/<nome>")
@@ -407,6 +423,12 @@ def main():
     ap.add_argument("-profile", dest="profile", default=None, help="home|lab (sobrepoe .env)")
     ap.add_argument("-runtime", dest="runtime", choices=["docker", "host"], default="docker")
     ap.add_argument("-root", dest="root", default=None, help="sobrepoe PHD_RUN_ROOT")
+    ap.add_argument("-lidar-engine", dest="lidar_engine", choices=["python", "r"],
+                    default="python", help="engine do passo lidar (default: python)")
+    ap.add_argument("--force-lidar", dest="force_lidar", action="store_true",
+                    help="reprocessa LiDAR mesmo se rasters ja existirem")
+    ap.add_argument("--skip-lidar", dest="skip_lidar", action="store_true",
+                    help="no 'all', nao roda o passo lidar (assume rasters prontos)")
     ap.add_argument("--init-from", dest="init_from", default=None,
                     help="caminho de pesos p/ finetune (grava parent/init_from no run.yaml)")
     ap.add_argument("--parent-run", dest="parent_run", default=None)
@@ -426,6 +448,15 @@ def main():
         rep = REPO / "reports" / "build-registry-report.py"
         return sys.exit(host_run(rep, ["--root", str(lay.root)], dry=a.dry_run))
 
+    if a.phase == "lidar":
+        if not a.aoi:
+            sys.exit("[ABORT] -aoi <nome> e obrigatorio.")
+        rc = phase_lidar(a.aoi, engine=a.lidar_engine, force=a.force_lidar, dry=a.dry_run)
+        if rc not in (0, None) and not a.dry_run:
+            sys.exit(f"[ABORT] lidar rc={rc}")
+        print("\n[OK] fases concluidas: lidar")
+        return
+
     if not a.experiment:
         sys.exit("[ABORT] -experiment <rede>/<nome> e obrigatorio.")
     cfg = load_experiment(lay, a.experiment)
@@ -436,7 +467,19 @@ def main():
     if not a.aoi:
         sys.exit("[ABORT] -aoi <nome> e obrigatorio.")
 
-    phases = ["resolve", "labels", "train", "predict", "post"] if a.phase == "all" else [a.phase]
+    needs_lidar = bool(cfg.get("latefusion", False)) or int(cfg.get("lidar_channels", 0) or 0) > 0
+    if a.phase == "all":
+        phases = ["resolve", "labels", "train", "predict", "post"]
+        if needs_lidar and not a.skip_lidar:
+            phases = ["lidar"] + phases
+    else:
+        phases = [a.phase]
+
+    if "lidar" in phases:
+        rc = phase_lidar(a.aoi, engine=a.lidar_engine, force=a.force_lidar, dry=a.dry_run)
+        if rc not in (0, None) and not a.dry_run:
+            sys.exit(f"[ABORT] lidar rc={rc}")
+
     res = phase_resolve(lay, cfg, a.aoi, a.runtime, dry=a.dry_run)
 
     # run.yaml base (apenas quando ha run e fases de treino/predicao)
@@ -456,7 +499,9 @@ def main():
         save_run_yaml(rd, data)
 
     for ph in phases:
-        if ph == "resolve":
+        if ph == "lidar":
+            print(f"[lidar] Engine={a.lidar_engine} aoi={a.aoi}")
+        elif ph == "resolve":
             print(f"[resolve] dataset_id={res['dataset_id']} -> {res['resolve_dir']}")
         elif ph == "labels":
             if run:

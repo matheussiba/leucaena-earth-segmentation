@@ -1,12 +1,11 @@
 # Wrapper na raiz: LiDAR do AOI (pool PHD_RUN_ROOT via .env).
-# Uso:  .\run_lidar.ps1 -aoi 261002-riodaspedras
-#       .\run_lidar.ps1 -aoi 261002-riodaspedras -Engine python   # PDAL antigo
-#       .\run_lidar.ps1 -aoi 261002-riodaspedras -Engine r        # lidR (default)
+# Uso:  .\run_lidar.ps1 -aoi 261002-riodaspedras              # Engine python (default)
+#       .\run_lidar.ps1 -aoi 261002-riodaspedras -Engine r     # lidR
 param(
     [Parameter(Mandatory = $true)]
     [string]$aoi,
     [ValidateSet("r", "python")]
-    [string]$Engine = "r",
+    [string]$Engine = "python",
     [ValidateSet("all", "products", "align")]
     [string]$Mode = "all",
     [switch]$Force,

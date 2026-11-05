@@ -22,12 +22,19 @@ cd C:\Users\CMQ\Documents\MSB\0-GITHUB\leucaena-earth-segmentation   # lab
 powershell -NoProfile -ExecutionPolicy Bypass -File .\run.ps1 labels -aoi 261002-riodaspedras -experiment manet/latefusion-multitask -run run-001
 ```
 
-Ordem típica depois do LiDAR pronto (`.\run_lidar.cmd -aoi ...`):
+Ordem típica (`all` já roda LiDAR python + 1–4):
 
-1. `.\run.cmd labels  ... -run run-001`
-2. `.\run.cmd train   ... -run run-001`
-3. `.\run.cmd predict ... -run run-001`
-4. `.\run.cmd post    ... -run run-001`
+```powershell
+.\run.cmd all -aoi 261002-riodaspedras -experiment manet/latefusion-multitask -run run-001
+```
+
+Ou por fase (LiDAR python é o default de `.\run_lidar.cmd`):
+
+1. `.\run_lidar.cmd -aoi ...`   (ou incluso no `all`)
+2. `.\run.cmd labels  ... -run run-001`
+3. `.\run.cmd train   ... -run run-001`
+4. `.\run.cmd predict ... -run run-001`
+5. `.\run.cmd post    ... -run run-001`
 
 ## .env (por PC)
 
@@ -44,8 +51,8 @@ O MANet late-fusion precisa de `tiles/lidar/rasters/<tile>.tif` `[CHM, INTENSITY
 
 ```powershell
 cd <repo>
-.\run_lidar.cmd -aoi 261002-riodaspedras                 # Engine r (lidR, default)
-.\run_lidar.cmd -aoi 261002-riodaspedras -Engine python  # PDAL antigo (prep-lidar-scene.py)
+.\run_lidar.cmd -aoi 261002-riodaspedras                 # Engine python (default, PDAL)
+.\run_lidar.cmd -aoi 261002-riodaspedras -Engine r       # lidR (TIN + lspikefree)
 ```
 
 Debug / engines / buracos TIN: ver

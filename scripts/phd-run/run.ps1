@@ -7,31 +7,37 @@
 #   .\run.ps1 report
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("resolve", "labels", "train", "predict", "post", "report", "all")]
+    [ValidateSet("lidar", "resolve", "labels", "train", "predict", "post", "report", "all")]
     [string]$phase,
     [string]$aoi,
     [string]$experiment,
     [string]$run,
     [string]$profile,
     [ValidateSet("docker", "host")][string]$runtime = "docker",
+    [ValidateSet("python", "r")][string]$lidarEngine = "python",
     [string]$root,
     [string]$initFrom,
     [string]$parentRun,
+    [switch]$forceLidar,
+    [switch]$skipLidar,
     [switch]$dryRun
 )
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
 $args = @($phase)
-if ($aoi)        { $args += @("-aoi", $aoi) }
-if ($experiment) { $args += @("-experiment", $experiment) }
-if ($run)        { $args += @("-run", $run) }
-if ($profile)    { $args += @("-profile", $profile) }
-if ($runtime)    { $args += @("-runtime", $runtime) }
-if ($root)       { $args += @("-root", $root) }
-if ($initFrom)   { $args += @("--init-from", $initFrom) }
-if ($parentRun)  { $args += @("--parent-run", $parentRun) }
-if ($dryRun)     { $args += @("--dry-run") }
+if ($aoi)         { $args += @("-aoi", $aoi) }
+if ($experiment)  { $args += @("-experiment", $experiment) }
+if ($run)         { $args += @("-run", $run) }
+if ($profile)     { $args += @("-profile", $profile) }
+if ($runtime)     { $args += @("-runtime", $runtime) }
+if ($lidarEngine) { $args += @("-lidar-engine", $lidarEngine) }
+if ($root)        { $args += @("-root", $root) }
+if ($initFrom)    { $args += @("--init-from", $initFrom) }
+if ($parentRun)   { $args += @("--parent-run", $parentRun) }
+if ($forceLidar)  { $args += @("--force-lidar") }
+if ($skipLidar)   { $args += @("--skip-lidar") }
+if ($dryRun)      { $args += @("--dry-run") }
 
 python (Join-Path $PSScriptRoot "run.py") @args
 exit $LASTEXITCODE

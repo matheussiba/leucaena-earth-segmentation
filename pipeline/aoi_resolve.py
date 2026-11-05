@@ -398,6 +398,8 @@ def main() -> None:
                    help="Poligono de recorte (default: aois/<aoi>-mask.gpkg se existir).")
     p.add_argument("--no-mask", action="store_true",
                    help="Ignora aois/<aoi>-mask.gpkg mesmo se existir.")
+    p.add_argument("--force", action="store_true",
+                   help="Refaz VRT/crop mesmo se aoi_rgbnir.tif/.vrt ja existir.")
     a = p.parse_args()
 
     root = Path(a.root) if a.root else None
@@ -422,6 +424,24 @@ def main() -> None:
             print(f"Mask AOI: {mask_gpkg}")
         elif a.mask_gpkg:
             raise SystemExit(f"[ABORT] --mask-gpkg nao encontrado: {a.mask_gpkg}")
+
+    # Cache: se saidas ja existem, nao recorta de novo (train/predict ficam rapidos)
+    meta_path = out_dir / "resolve.json"
+    rgb_tif = out_dir / "aoi_rgbnir.tif"
+    lid_tif = out_dir / "aoi_lidar.tif"
+    rgb_vrt_p = out_dir / "aoi_rgbnir.vrt"
+    lid_vrt_p = out_dir / "aoi_lidar.vrt"
+    ann_p = out_dir / "aoi_annotations.gpkg"
+    if not a.force and meta_path.is_file():
+        rgb_ok = rgb_tif.is_file() if mask_gpkg else (rgb_tif.is_file() or rgb_vrt_p.is_file())
+        lid_ok = True
+        if a.require_lidar:
+            lid_ok = lid_tif.is_file() if mask_gpkg else (lid_tif.is_file() or lid_vrt_p.is_file())
+        ann_ok = (not a.annotations) or ann_p.is_file()
+        if rgb_ok and lid_ok and ann_ok:
+            print(f"[skip] resolve ja pronto em {out_dir} (use --force p/ refazer)")
+            print(f"resolve.json -> {meta_path}")
+            return
 
     index, stem_paths = build_optical_pool(tiles_dir)
     # cache sempre reconstruido do disco
@@ -462,7 +482,7 @@ def main() -> None:
                          if a.src_prefix else None)
     rgb_vrt = out_dir / "aoi_rgbnir.vrt"
     lid_vrt = out_dir / "aoi_lidar.vrt"
-    for p in (rgb_vrt, lid_vrt, out_dir / "aoi_rgbnir.tif", out_dir / "aoi_lidar.tif",
+    for p in (rgb_vrt, lid_vrt, rgb_tif, lid_tif,
               out_dir / "aoi_rgbnir_full.vrt", out_dir / "aoi_lidar_full.vrt"):
         if p.exists():
             p.unlink()

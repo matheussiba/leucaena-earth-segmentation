@@ -21,6 +21,7 @@ param(
     [switch]$mask,
     [switch]$forceLidar,
     [switch]$skipLidar,
+    [switch]$forceResolve,
     [switch]$dryRun
 )
 $ErrorActionPreference = "Stop"
@@ -38,9 +39,10 @@ if ($initFrom)    { $args += @("--init-from", $initFrom) }
 if ($parentRun)   { $args += @("--parent-run", $parentRun) }
 if ($mask)        { $args += @("-mask") }
 if ($maskGpkg)    { $args += @("-mask-gpkg", $maskGpkg) }
-if ($forceLidar)  { $args += @("--force-lidar") }
-if ($skipLidar)   { $args += @("--skip-lidar") }
-if ($dryRun)      { $args += @("--dry-run") }
+if ($forceLidar)    { $args += @("--force-lidar") }
+if ($skipLidar)     { $args += @("--skip-lidar") }
+if ($forceResolve)  { $args += @("--force-resolve") }
+if ($dryRun)        { $args += @("--dry-run") }
 
 python (Join-Path $PSScriptRoot "run.py") @args
 exit $LASTEXITCODE

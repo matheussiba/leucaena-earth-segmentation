@@ -19,6 +19,7 @@ param(
     [switch]$mask,
     [switch]$forceLidar,
     [switch]$skipLidar,
+    [switch]$forceResolve,
     [switch]$dryRun
 )
 $ErrorActionPreference = "Stop"

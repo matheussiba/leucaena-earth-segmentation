@@ -301,8 +301,9 @@ def phase_resolve(lay: Layout, cfg: dict, aoi: str, runtime: str, dry=False) -> 
     needs_lidar = bool(cfg.get("latefusion", False)) or int(cfg.get("lidar_channels", 0) or 0) > 0
     if needs_lidar:
         args += ["--require-lidar"]
-    # resolve roda SEMPRE no host (so precisa rasterio+geopandas; produz VRT
-    # com o prefixo adequado ao runtime de treino).
+    if cfg.get("_force_resolve"):
+        args += ["--force"]
+    # resolve no host; se saidas ja existem, aoi_resolve faz skip (sem --force)
     rc = host_run(resolver, args, dry=dry)
     if rc != 0 and not dry:
         sys.exit(f"[ABORT] resolve falhou (rc={rc}).")
@@ -515,6 +516,8 @@ def main():
                     help="reprocessa LiDAR mesmo se rasters ja existirem")
     ap.add_argument("--skip-lidar", dest="skip_lidar", action="store_true",
                     help="no 'all', nao roda o passo lidar (assume rasters prontos)")
+    ap.add_argument("--force-resolve", dest="force_resolve", action="store_true",
+                    help="Refaz crop/VRT do resolve mesmo se ja existir")
     ap.add_argument("-mask", dest="use_mask", action="store_true",
                     help="Recorta aois/<aoi>-mask.gpkg (dataset ...__mask). "
                          "Sem esta flag, nao usa mask mesmo se o arquivo existir.")
@@ -558,6 +561,7 @@ def main():
     cfg["_use_mask"] = bool(a.use_mask or a.mask_gpkg)
     if a.mask_gpkg:
         cfg["_mask_gpkg"] = a.mask_gpkg
+    cfg["_force_resolve"] = bool(a.force_resolve)
     if not a.aoi:
         sys.exit("[ABORT] -aoi <nome> e obrigatorio.")
 

@@ -434,7 +434,10 @@ def phase_train(lay, cfg, aoi, res, run, runtime, dry=False):
     # init_from (finetune): injeta pesos de outro run
     if cfg.get("_init_from"):
         args += ["--init_from", _p(lay, runtime, Path(cfg["_init_from"]))]
-    args += [str(a) for a in cfg.get("train_extra_args", [])]
+    extra = cfg.get("train_extra_args") or []
+    if not isinstance(extra, (list, tuple)):
+        sys.exit(f"[ABORT] train_extra_args deve ser lista no experiment.yaml, veio: {type(extra).__name__}")
+    args += [str(a) for a in extra]
     script_rel = "scripts/manet-latefusion-multitask/02_train.py"
     if runtime == "docker":
         return docker_run(lay, prof, script_rel, args, dry=dry)

@@ -278,6 +278,9 @@ def main() -> None:
                    help="Prefixo escrito no SourceFilename do VRT (ex.: /data/tiles). "
                         "Default = pasta de tiles usada p/ ler.")
     p.add_argument("--rebuild-index", action="store_true")
+    p.add_argument("--require-lidar", action="store_true",
+                   help="ABORT se aoi_lidar.vrt nao puder ser montado "
+                        "(obrigatorio p/ latefusion).")
     a = p.parse_args()
 
     root = Path(a.root) if a.root else None
@@ -341,10 +344,14 @@ def main() -> None:
             f"Verifique se os .tif do AOI existem em {rgb_dir}."
         )
     if not lid_info.get("ok"):
-        print(
-            f"[warn] sem LiDAR em {lid_dir} para tiles {tiles}. "
+        msg = (
+            f"sem LiDAR em {lid_dir} para tiles {tiles} "
+            f"(missing={lid_info.get('missing')}). "
             f"Gere com: .\\run_lidar.cmd -aoi {aoi_gpkg.stem} -Engine python -Force"
         )
+        if a.require_lidar:
+            raise SystemExit(f"[ABORT] {msg}")
+        print(f"[warn] {msg}")
 
     annot_info = None
     if a.annotations:

@@ -212,6 +212,9 @@ def phase_resolve(lay: Layout, cfg: dict, aoi: str, runtime: str, dry=False) -> 
     nf = cfg.get("nomenc_field")
     if nf:
         args += ["--nomenc-field", nf]
+    needs_lidar = bool(cfg.get("latefusion", False)) or int(cfg.get("lidar_channels", 0) or 0) > 0
+    if needs_lidar:
+        args += ["--require-lidar"]
     # resolve roda SEMPRE no host (so precisa rasterio+geopandas; produz VRT
     # com o prefixo adequado ao runtime de treino).
     rc = host_run(resolver, args, dry=dry)

@@ -37,6 +37,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(REPO))  # pipeline.aoi_resolve etc.
 import _miniyaml as yaml  # noqa: E402
 
 MANET_DIR = REPO / "scripts" / "manet-latefusion-multitask"

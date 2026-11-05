@@ -453,61 +453,91 @@ def main() -> None:
             f"NOMENC sem arquivo (amostra): {missing_wanted}."
         )
 
-    rgb_prefix = (f"{a.src_prefix.rstrip('/')}/{RGBNIR_REL}"
-                  if a.src_prefix else None)
-    lid_prefix = (f"{a.src_prefix.rstrip('/')}/lidar/rasters"
-                  if a.src_prefix else None)
+    # Docker prefix so para VRT consumido no container SEM mask.
+    # Com mask o crop roda no HOST → VRT precisa de paths do host (senao
+    # /data/tiles/... nao existe e o rasterio quebra).
+    docker_rgb_prefix = (f"{a.src_prefix.rstrip('/')}/{RGBNIR_REL}"
+                         if a.src_prefix else None)
+    docker_lid_prefix = (f"{a.src_prefix.rstrip('/')}/lidar/rasters"
+                         if a.src_prefix else None)
     rgb_vrt = out_dir / "aoi_rgbnir.vrt"
     lid_vrt = out_dir / "aoi_lidar.vrt"
-    if rgb_vrt.exists():
-        rgb_vrt.unlink()
-    if lid_vrt.exists():
-        lid_vrt.unlink()
-    rgb_info = write_vrt(tiles, rgb_dir, rgb_vrt, rgb_prefix)
-    lid_info = write_vrt(tiles, lid_dir, lid_vrt, lid_prefix)
-    print(f"  rgbnir VRT: {rgb_info}")
-    print(f"  lidar  VRT: {lid_info} (tiles sem lidar sao ignorados)")
-    if not rgb_info.get("ok"):
-        raise SystemExit(
-            f"[ABORT] falha ao montar aoi_rgbnir.vrt: {rgb_info}. "
-            f"Verifique se os .tif do AOI existem em {rgb_dir}."
-        )
-    if not lid_info.get("ok"):
-        msg = (
-            f"sem LiDAR em {lid_dir} para tiles {tiles} "
-            f"(missing={lid_info.get('missing')}). "
-            f"Gere com: .\\run_lidar.cmd -aoi {aoi_gpkg.stem} -Engine python -Force"
-        )
-        if a.require_lidar:
-            raise SystemExit(f"[ABORT] {msg}")
-        print(f"[warn] {msg}")
+    for p in (rgb_vrt, lid_vrt, out_dir / "aoi_rgbnir.tif", out_dir / "aoi_lidar.tif",
+              out_dir / "aoi_rgbnir_full.vrt", out_dir / "aoi_lidar_full.vrt"):
+        if p.exists():
+            p.unlink()
 
     # Paths finais usados por labels/train/predict (podem virar .tif apos mask)
-    rgb_final = rgb_vrt
-    lid_final = lid_vrt if lid_info.get("ok") else None
+    rgb_final: Path
+    lid_final: Path | None
     mask_info = None
 
     if mask_gpkg is not None:
+        # VRT temporario com paths ABSOLUTOS do host p/ o crop
+        host_rgb_vrt = out_dir / "_host_rgbnir.vrt"
+        host_lid_vrt = out_dir / "_host_lidar.vrt"
+        rgb_info = write_vrt(tiles, rgb_dir, host_rgb_vrt, src_prefix=None)
+        lid_info = write_vrt(tiles, lid_dir, host_lid_vrt, src_prefix=None)
+        print(f"  rgbnir VRT (host): {rgb_info}")
+        print(f"  lidar  VRT (host): {lid_info} (tiles sem lidar sao ignorados)")
+        if not rgb_info.get("ok"):
+            raise SystemExit(
+                f"[ABORT] falha ao montar VRT host rgbnir: {rgb_info}. "
+                f"Verifique se os .tif do AOI existem em {rgb_dir}."
+            )
+        if not lid_info.get("ok"):
+            msg = (
+                f"sem LiDAR em {lid_dir} para tiles {tiles} "
+                f"(missing={lid_info.get('missing')}). "
+                f"Gere com: .\\run_lidar.cmd -aoi {aoi_gpkg.stem} -Engine python -Force"
+            )
+            if a.require_lidar:
+                raise SystemExit(f"[ABORT] {msg}")
+            print(f"[warn] {msg}")
+
         print(f"  recortando rasters pela mask {mask_gpkg.name} ...")
         rgb_tif = out_dir / "aoi_rgbnir.tif"
         mask_info = {"mask_gpkg": str(mask_gpkg).replace("\\", "/")}
-        rgb_crop = crop_raster_to_mask(rgb_vrt, mask_gpkg, rgb_tif, nodata_fill=0.0)
+        rgb_crop = crop_raster_to_mask(host_rgb_vrt, mask_gpkg, rgb_tif, nodata_fill=0.0)
         print(f"  rgbnir crop: {rgb_crop}")
         rgb_final = rgb_tif
         mask_info["rgbnir"] = rgb_crop
-        if lid_info.get("ok") and lid_vrt.is_file():
+        lid_final = None
+        if lid_info.get("ok") and host_lid_vrt.is_file():
             lid_tif = out_dir / "aoi_lidar.tif"
-            lid_crop = crop_raster_to_mask(lid_vrt, mask_gpkg, lid_tif, nodata_fill=0.0)
+            lid_crop = crop_raster_to_mask(host_lid_vrt, mask_gpkg, lid_tif, nodata_fill=0.0)
             print(f"  lidar  crop: {lid_crop}")
             lid_final = lid_tif
             mask_info["lidar"] = lid_crop
-        # VRT full fica como *_full.vrt p/ debug; labels usam os .tif
-        rgb_full = out_dir / "aoi_rgbnir_full.vrt"
-        if rgb_vrt.exists():
-            rgb_vrt.replace(rgb_full)
-        if lid_vrt.is_file():
-            lid_full = out_dir / "aoi_lidar_full.vrt"
-            lid_vrt.replace(lid_full)
+        # guarda VRT full com prefixo docker (debug / uso sem mask)
+        if docker_rgb_prefix:
+            write_vrt(tiles, rgb_dir, out_dir / "aoi_rgbnir_full.vrt", docker_rgb_prefix)
+        if lid_info.get("ok") and docker_lid_prefix:
+            write_vrt(tiles, lid_dir, out_dir / "aoi_lidar_full.vrt", docker_lid_prefix)
+        for tmp in (host_rgb_vrt, host_lid_vrt):
+            if tmp.exists():
+                tmp.unlink()
+    else:
+        rgb_info = write_vrt(tiles, rgb_dir, rgb_vrt, docker_rgb_prefix)
+        lid_info = write_vrt(tiles, lid_dir, lid_vrt, docker_lid_prefix)
+        print(f"  rgbnir VRT: {rgb_info}")
+        print(f"  lidar  VRT: {lid_info} (tiles sem lidar sao ignorados)")
+        if not rgb_info.get("ok"):
+            raise SystemExit(
+                f"[ABORT] falha ao montar aoi_rgbnir.vrt: {rgb_info}. "
+                f"Verifique se os .tif do AOI existem em {rgb_dir}."
+            )
+        if not lid_info.get("ok"):
+            msg = (
+                f"sem LiDAR em {lid_dir} para tiles {tiles} "
+                f"(missing={lid_info.get('missing')}). "
+                f"Gere com: .\\run_lidar.cmd -aoi {aoi_gpkg.stem} -Engine python -Force"
+            )
+            if a.require_lidar:
+                raise SystemExit(f"[ABORT] {msg}")
+            print(f"[warn] {msg}")
+        rgb_final = rgb_vrt
+        lid_final = lid_vrt if lid_info.get("ok") else None
 
     clip_for_ann = mask_gpkg if mask_gpkg is not None else aoi_gpkg
     annot_info = None

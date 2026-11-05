@@ -155,12 +155,28 @@ def load_experiment(lay: Layout, experiment: str) -> dict:
     return cfg
 
 
-def dataset_id(aoi: str, cfg: dict) -> str:
+def dataset_id(aoi: str, cfg: dict, masked: bool = False) -> str:
     v = cfg.get("labels", {}).get("version", 1) if isinstance(cfg.get("labels"), dict) else 1
     did = f"{aoi}__lbl-v{v}"
+    if masked:
+        did += "__mask"
     if cfg.get("save_patches"):
         did += f"__p{cfg.get('patch_size', 256)}"
     return did
+
+
+def aoi_mask_path(lay: Layout, aoi: str, cfg: dict) -> Path | None:
+    """aois/<aoi>-mask.gpkg se existir (ou cfg mask_gpkg); None se use_aoi_mask:false."""
+    if cfg.get("use_aoi_mask") is False:
+        return None
+    explicit = cfg.get("mask_gpkg") or cfg.get("aoi_mask")
+    if explicit:
+        p = Path(explicit)
+        if not p.is_absolute():
+            p = lay.aois / p
+        return p if p.is_file() else None
+    cand = lay.aois / f"{aoi}-mask.gpkg"
+    return cand if cand.is_file() else None
 
 
 def annotations_path(lay: Layout, cfg: dict) -> Path | None:
@@ -215,8 +231,18 @@ def phase_lidar(aoi: str, engine: str = "python", force: bool = False, dry=False
     return _run(cmd, cwd=REPO, dry=dry)
 
 
+def _resolve_raster(out: Path, stem: str) -> Path | None:
+    """Prefere .tif (mask crop); senao .vrt."""
+    for ext in (".tif", ".vrt"):
+        p = out / f"{stem}{ext}"
+        if p.is_file():
+            return p
+    return None
+
+
 def phase_resolve(lay: Layout, cfg: dict, aoi: str, runtime: str, dry=False) -> dict:
-    did = dataset_id(aoi, cfg)
+    mask_p = aoi_mask_path(lay, aoi, cfg)
+    did = dataset_id(aoi, cfg, masked=mask_p is not None)
     out = lay.datasets / did / "_resolve"
     annot = annotations_path(lay, cfg)
     src_prefix = MOUNTS["tiles"] if runtime == "docker" else str(lay.tiles).replace("\\", "/")
@@ -228,6 +254,10 @@ def phase_resolve(lay: Layout, cfg: dict, aoi: str, runtime: str, dry=False) -> 
     nf = cfg.get("nomenc_field")
     if nf:
         args += ["--nomenc-field", nf]
+    if mask_p is not None:
+        args += ["--mask-gpkg", str(mask_p)]
+    elif cfg.get("use_aoi_mask") is False:
+        args += ["--no-mask"]
     needs_lidar = bool(cfg.get("latefusion", False)) or int(cfg.get("lidar_channels", 0) or 0) > 0
     if needs_lidar:
         args += ["--require-lidar"]
@@ -236,11 +266,11 @@ def phase_resolve(lay: Layout, cfg: dict, aoi: str, runtime: str, dry=False) -> 
     rc = host_run(resolver, args, dry=dry)
     if rc != 0 and not dry:
         sys.exit(f"[ABORT] resolve falhou (rc={rc}).")
-    rgb_vrt = out / "aoi_rgbnir.vrt"
-    lid_vrt = out / "aoi_lidar.vrt"
+    rgb_vrt = _resolve_raster(out, "aoi_rgbnir")
+    lid_vrt = _resolve_raster(out, "aoi_lidar")
     if not dry:
-        if not rgb_vrt.is_file():
-            sys.exit(f"[ABORT] resolve nao gerou {rgb_vrt}")
+        if rgb_vrt is None:
+            sys.exit(f"[ABORT] resolve nao gerou aoi_rgbnir.tif/.vrt em {out}")
         meta = out / "resolve.json"
         info = {}
         if meta.is_file():
@@ -248,18 +278,30 @@ def phase_resolve(lay: Layout, cfg: dict, aoi: str, runtime: str, dry=False) -> 
                 info = json.loads(meta.read_text(encoding="utf-8"))
                 if not (info.get("rgbnir") or {}).get("ok"):
                     sys.exit(
-                        f"[ABORT] aoi_rgbnir.vrt invalido: {info.get('rgbnir')}. "
+                        f"[ABORT] aoi_rgbnir invalido: {info.get('rgbnir')}. "
                         "Coloque o tile do AOI em tiles/optical/rgbnir/ e rode de novo."
                     )
+                # paths do resolve.json (apos mask apontam p/ .tif)
+                for key, var in (("rgbnir_vrt", "rgb"), ("lidar_vrt", "lid")):
+                    raw = info.get(key)
+                    if raw:
+                        p = Path(raw)
+                        if p.is_file():
+                            if var == "rgb":
+                                rgb_vrt = p
+                            else:
+                                lid_vrt = p
             except Exception as exc:  # noqa: BLE001
                 print(f"[warn] nao li resolve.json: {exc}")
+        if mask_p is not None:
+            print(f"[resolve] mask ativa -> dataset_id={did}")
         needs_lidar = bool(cfg.get("latefusion", False)) or int(cfg.get("lidar_channels", 0) or 0) > 0
-        lidar_ok = lid_vrt.is_file() and (info.get("lidar") or {}).get("ok", lid_vrt.is_file())
+        lidar_ok = lid_vrt is not None and lid_vrt.is_file()
         if needs_lidar and not lidar_ok:
             missing = (info.get("lidar") or {}).get("missing") or info.get("tiles")
             rasters = lay.tiles / "lidar" / "rasters"
             sys.exit(
-                f"[ABORT] latefusion precisa de LiDAR, mas aoi_lidar.vrt falhou "
+                f"[ABORT] latefusion precisa de LiDAR, mas aoi_lidar falhou "
                 f"(missing={missing}).\n"
                 f"        Esperado: {rasters}/<tile>.tif  [CHM, INTENSITY]\n"
                 f"        Gere com: .\\run_lidar.cmd -aoi {aoi} -Engine python -Force\n"
@@ -269,9 +311,10 @@ def phase_resolve(lay: Layout, cfg: dict, aoi: str, runtime: str, dry=False) -> 
         "dataset_id": did,
         "resolve_dir": out,
         "rgbnir_vrt": rgb_vrt,
-        "lidar_vrt": lid_vrt if lid_vrt.is_file() else None,
+        "lidar_vrt": lid_vrt,
         "annotations_clip": out / "aoi_annotations.gpkg",
         "masks": lay.datasets / did / "masks",
+        "masked": mask_p is not None,
     }
 
 

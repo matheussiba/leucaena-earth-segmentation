@@ -45,6 +45,15 @@ TRAIN_PROFILE=lab   # home | lab  (batch/workers via profiles no experiment.yaml
 R_BIN=C:/Program Files/R/R-4.6.1/bin/Rscript.exe
 ```
 
+## Mask de AOI (treino mais rapido / sem buraco)
+
+Se existir `aois/<aoi>-mask.gpkg` (ex.: `261002-riodaspedras-mask.gpkg`), o
+**resolve** recorta optico + LiDAR + annotations a esse poligono e grava
+`aoi_rgbnir.tif` / `aoi_lidar.tif` sob
+`datasets/<aoi>__lbl-v1__mask/_resolve/`.
+
+Desligar: `use_aoi_mask: false` no `experiment.yaml`.
+
 ## Antes do treino: LiDAR do AOI
 
 O MANet late-fusion precisa de `tiles/lidar/rasters/<tile>.tif` `[CHM, INTENSITY]`.

@@ -9,10 +9,14 @@ Dado:
   - annotations global  <root>/annotations/<arquivo>.gpkg
 
 Produz (em --out-dir):
-  - aoi_rgbnir.vrt      mosaico virtual (sem copiar bytes) dos tiles RGBNIR do AOI
-  - aoi_lidar.vrt       idem para os tiles LiDAR (so os que existem no pool)
-  - aoi_annotations.gpkg  annotations recortado pela geometria do AOI
-  - resolve.json        tiles resolvidos, campo NOMENC usado, caminhos
+  - aoi_rgbnir.vrt/.tif   mosaico RGBNIR do AOI (tif se houver mask)
+  - aoi_lidar.vrt/.tif    idem LiDAR
+  - aoi_annotations.gpkg  annotations recortado (AOI ou mask)
+  - resolve.json
+
+Mask opcional (treino rapido / sem buraco LiDAR):
+  aois/<aoi>-mask.gpkg  ou  --mask-gpkg PATH
+  Depois dos VRTs, recorta optico + lidar + annotations ao poligono da mask.
 
 Como casa AOI -> tiles:
   1. auto-detecta qual coluna NOMENC_* casa com os nomes dos arquivos do pool
@@ -244,21 +248,78 @@ def write_vrt(stems: list[str], src_dir: Path, out_vrt: Path,
 
 
 # ---------------------------------------------------------------------------
-# Recorte das anotacoes pelo AOI
+# Mask / recorte
 # ---------------------------------------------------------------------------
-def clip_annotations(annot_path: Path, aoi_gpkg: Path, out_path: Path) -> dict:
+def find_aoi_mask(aois_dir: Path, aoi: str, explicit: Path | None = None) -> Path | None:
+    """aois/<aoi>-mask.gpkg (ou caminho explicito)."""
+    if explicit is not None:
+        p = Path(explicit)
+        return p if p.is_file() else None
+    if not aoi:
+        return None
+    cand = Path(aois_dir) / f"{aoi}-mask.gpkg"
+    return cand if cand.is_file() else None
+
+
+def clip_annotations(annot_path: Path, clip_gpkg: Path, out_path: Path) -> dict:
     import geopandas as gpd
 
-    aoi = gpd.read_file(aoi_gpkg)
+    clip = gpd.read_file(clip_gpkg)
     ann = gpd.read_file(annot_path)
-    if ann.crs != aoi.crs:
-        aoi = aoi.to_crs(ann.crs)
-    aoi_union = aoi.geometry.union_all() if hasattr(aoi.geometry, "union_all") \
-        else aoi.geometry.unary_union
-    clipped = gpd.clip(ann, aoi_union)
+    if ann.crs != clip.crs:
+        clip = clip.to_crs(ann.crs)
+    clip_union = clip.geometry.union_all() if hasattr(clip.geometry, "union_all") \
+        else clip.geometry.unary_union
+    clipped = gpd.clip(ann, clip_union)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     clipped.to_file(out_path, driver="GPKG")
-    return {"features_in": len(ann), "features_out": len(clipped)}
+    return {"features_in": len(ann), "features_out": len(clipped),
+            "clip": str(clip_gpkg)}
+
+
+def crop_raster_to_mask(src_path: Path, mask_gpkg: Path, out_path: Path,
+                        nodata_fill: float = 0.0) -> dict:
+    """Recorta raster/VRT ao poligono da mask (crop=True); fora = nodata_fill."""
+    import geopandas as gpd
+    from rasterio.mask import mask as rio_mask
+
+    gdf = gpd.read_file(mask_gpkg)
+    if gdf.empty or gdf.geometry.is_empty.all():
+        raise SystemExit(f"[ABORT] mask vazia: {mask_gpkg}")
+
+    with rasterio.open(src_path) as src:
+        if gdf.crs and src.crs and gdf.crs != src.crs:
+            gdf = gdf.to_crs(src.crs)
+        geoms = [g.__geo_interface__ for g in gdf.geometry
+                 if g is not None and not g.is_empty]
+        if not geoms:
+            raise SystemExit(f"[ABORT] mask sem geometria valida: {mask_gpkg}")
+        fill = src.nodata if src.nodata is not None else nodata_fill
+        data, transform = rio_mask(
+            src, geoms, crop=True, all_touched=True, filled=True, nodata=fill,
+        )
+        meta = src.meta.copy()
+        meta.update({
+            "driver": "GTiff",
+            "height": data.shape[1],
+            "width": data.shape[2],
+            "transform": transform,
+            "compress": "deflate",
+            "tiled": True,
+            "BIGTIFF": "IF_SAFER",
+        })
+        if meta.get("nodata") is None:
+            meta["nodata"] = fill
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(out_path, "w", **meta) as dst:
+            dst.write(data)
+        return {
+            "ok": True,
+            "width": int(data.shape[2]),
+            "height": int(data.shape[1]),
+            "bands": int(data.shape[0]),
+            "path": str(out_path).replace("\\", "/"),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -281,10 +342,15 @@ def main() -> None:
     p.add_argument("--require-lidar", action="store_true",
                    help="ABORT se aoi_lidar.vrt nao puder ser montado "
                         "(obrigatorio p/ latefusion).")
+    p.add_argument("--mask-gpkg", default=None,
+                   help="Poligono de recorte (default: aois/<aoi>-mask.gpkg se existir).")
+    p.add_argument("--no-mask", action="store_true",
+                   help="Ignora aois/<aoi>-mask.gpkg mesmo se existir.")
     a = p.parse_args()
 
     root = Path(a.root) if a.root else None
     tiles_dir = Path(a.tiles_dir) if a.tiles_dir else (root / "tiles")
+    aois_dir = (root / "aois") if root else Path(".")
     rgb_dir = find_rgbnir_dir(tiles_dir)
     lid_dir = tiles_dir / "lidar" / "rasters"
     aoi_gpkg = Path(a.aoi_gpkg) if a.aoi_gpkg else (root / "aois" / f"{a.aoi}.gpkg")
@@ -293,6 +359,17 @@ def main() -> None:
 
     if not aoi_gpkg.exists():
         raise SystemExit(f"[ABORT] AOI gpkg nao encontrado: {aoi_gpkg}")
+
+    mask_gpkg = None
+    if not a.no_mask:
+        mask_gpkg = find_aoi_mask(
+            aois_dir, a.aoi or aoi_gpkg.stem,
+            Path(a.mask_gpkg) if a.mask_gpkg else None,
+        )
+        if mask_gpkg:
+            print(f"Mask AOI: {mask_gpkg}")
+        elif a.mask_gpkg:
+            raise SystemExit(f"[ABORT] --mask-gpkg nao encontrado: {a.mask_gpkg}")
 
     index, stem_paths = build_optical_pool(tiles_dir)
     # cache sempre reconstruido do disco
@@ -353,13 +430,41 @@ def main() -> None:
             raise SystemExit(f"[ABORT] {msg}")
         print(f"[warn] {msg}")
 
+    # Paths finais usados por labels/train/predict (podem virar .tif apos mask)
+    rgb_final = rgb_vrt
+    lid_final = lid_vrt if lid_info.get("ok") else None
+    mask_info = None
+
+    if mask_gpkg is not None:
+        print(f"  recortando rasters pela mask {mask_gpkg.name} ...")
+        rgb_tif = out_dir / "aoi_rgbnir.tif"
+        mask_info = {"mask_gpkg": str(mask_gpkg).replace("\\", "/")}
+        rgb_crop = crop_raster_to_mask(rgb_vrt, mask_gpkg, rgb_tif, nodata_fill=0.0)
+        print(f"  rgbnir crop: {rgb_crop}")
+        rgb_final = rgb_tif
+        mask_info["rgbnir"] = rgb_crop
+        if lid_info.get("ok") and lid_vrt.is_file():
+            lid_tif = out_dir / "aoi_lidar.tif"
+            lid_crop = crop_raster_to_mask(lid_vrt, mask_gpkg, lid_tif, nodata_fill=0.0)
+            print(f"  lidar  crop: {lid_crop}")
+            lid_final = lid_tif
+            mask_info["lidar"] = lid_crop
+        # VRT full fica como *_full.vrt p/ debug; labels usam os .tif
+        rgb_full = out_dir / "aoi_rgbnir_full.vrt"
+        if rgb_vrt.exists():
+            rgb_vrt.replace(rgb_full)
+        if lid_vrt.is_file():
+            lid_full = out_dir / "aoi_lidar_full.vrt"
+            lid_vrt.replace(lid_full)
+
+    clip_for_ann = mask_gpkg if mask_gpkg is not None else aoi_gpkg
     annot_info = None
     if a.annotations:
         annot_path = Path(a.annotations)
         if annot_path.exists():
-            annot_info = clip_annotations(annot_path, aoi_gpkg,
+            annot_info = clip_annotations(annot_path, clip_for_ann,
                                           out_dir / "aoi_annotations.gpkg")
-            print(f"  annotations recortado: {annot_info}")
+            print(f"  annotations recortado ({'mask' if mask_gpkg else 'aoi'}): {annot_info}")
         else:
             print(f"  [warn] annotations nao encontrado: {annot_path}")
 
@@ -367,12 +472,18 @@ def main() -> None:
         "aoi": aoi_gpkg.stem, "resolved_via": how, "n_tiles": len(tiles),
         "tiles": tiles,
         "tile_paths": {t: str(stem_paths[t]).replace("\\", "/") for t in tiles},
-        "rgbnir_vrt": str(rgb_vrt),
-        "lidar_vrt": str(lid_vrt) if lid_info.get("ok") else None,
-        "rgbnir": rgb_info, "lidar": lid_info, "annotations": annot_info,
+        "mask": mask_info,
+        "rgbnir_vrt": str(rgb_final).replace("\\", "/"),
+        "lidar_vrt": str(lid_final).replace("\\", "/") if lid_final else None,
+        "rgbnir": rgb_info if mask_info is None else mask_info.get("rgbnir", rgb_info),
+        "lidar": lid_info if mask_info is None else (mask_info.get("lidar") or lid_info),
+        "annotations": annot_info,
     }
     (out_dir / "resolve.json").write_text(json.dumps(resolve, indent=2), encoding="utf-8")
     print(f"\nresolve.json -> {out_dir / 'resolve.json'}")
+    if mask_gpkg:
+        print(f"  (treino usara recorte mask: {rgb_final.name}"
+              f"{', ' + Path(lid_final).name if lid_final else ''})")
 
 
 if __name__ == "__main__":

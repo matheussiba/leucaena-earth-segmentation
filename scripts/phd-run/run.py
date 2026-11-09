@@ -434,7 +434,12 @@ def phase_train(lay, cfg, aoi, res, run, runtime, dry=False):
         args += ["--pretrained"]
     # init_from (finetune): injeta pesos de outro run
     if cfg.get("_init_from"):
-        args += ["--init_from", _p(lay, runtime, Path(cfg["_init_from"]))]
+        init_host = Path(cfg["_init_from"])
+        if not init_host.is_absolute():
+            # aceita relativo a PHD_RUN_ROOT ou a experiments/
+            cand = [lay.root / init_host, lay.experiments / init_host]
+            init_host = next((c for c in cand if c.is_file()), lay.root / init_host)
+        args += ["--init_from", _p(lay, runtime, init_host)]
     extra = cfg.get("train_extra_args") or []
     if not isinstance(extra, (list, tuple)):
         sys.exit(f"[ABORT] train_extra_args deve ser lista no experiment.yaml, veio: {type(extra).__name__}")

@@ -2585,18 +2585,73 @@ def run_epoch(model, loader, criterion, optimizer, device,
 # ─────────────────────────────────────────────────────────────
 # 8.  Main training orchestration
 # ─────────────────────────────────────────────────────────────
+def _check_ckpt_compat(ckpt_path, ckpt, args, *, mode):
+    """Abort/warn on task or norm mismatch. Returns False if caller should skip load."""
+    ckpt_args = ckpt.get('args', {})
+    ckpt_task = ckpt_args.get('task', None)
+    if ckpt_task is not None and ckpt_task != args.task:
+        print(f"  ⚠️  Task do checkpoint ('{ckpt_task}') ≠ task atual ('{args.task}'). "
+              f"As cabeças diferem; iniciando do zero para evitar incompatibilidade.")
+        return False
+    for key, what in (('rgb_norm', 'RGB'), ('lidar_norm', 'LiDAR')):
+        ckpt_norm = ckpt_args.get(key, None)
+        if ckpt_norm is not None and ckpt_norm != getattr(args, key, None):
+            sys.exit(f"[{mode}] o checkpoint {ckpt_path} foi treinado com normalização "
+                     f"{what} '{ckpt_norm}', mas a atual é '{getattr(args, key, None)}'. "
+                     f"Use o mesmo rgb_norm_method/lidar_norm do treino original.")
+    return True
+
+
+def _load_model_weights(ckpt, model, *, tag):
+    state = ckpt.get('state_dict', ckpt)
+    state = {k.replace('module.', ''): v for k, v in state.items()}
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing:
+        print(f"  [{tag}][WARN] chaves ausentes: {missing[:4]}{'...' if len(missing)>4 else ''}")
+    if unexpected:
+        print(f"  [{tag}][WARN] chaves inesperadas: {unexpected[:4]}{'...' if len(unexpected)>4 else ''}")
+
+
+def _maybe_init_from(args, model, criterion, device):
+    """
+    Finetune: carrega só pesos (e criterion se houver) de --init_from.
+    NÃO restaura optimizer/scheduler/época — treina epochs do zero neste run.
+    """
+    init_path = (getattr(args, 'init_from', '') or '').strip()
+    if not init_path:
+        return False
+    if not os.path.isfile(init_path):
+        sys.exit(f"[init_from] arquivo não encontrado: {init_path}")
+
+    print(f"[init_from] finetune a partir de: {init_path}")
+    ckpt = torch.load(init_path, map_location=device, weights_only=False)
+    if not _check_ckpt_compat(init_path, ckpt, args, mode='init_from'):
+        return False
+
+    _load_model_weights(ckpt, model, tag='init_from')
+
+    if ckpt.get('criterion') is not None and hasattr(criterion, 'load_state_dict'):
+        try:
+            criterion.load_state_dict(ckpt['criterion'])
+            print("  ✓ pesos de tarefa (criterion) carregados")
+        except Exception as e:
+            print(f"  [init_from][WARN] não restaurou criterion ({e}).")
+
+    src_epoch = int(ckpt.get('epoch', 0))
+    print(f"  ✓ Pesos carregados (origem: época {src_epoch}). "
+          f"Optimizer/scheduler novos; treino deste run = épocas 1..{args.epochs}")
+    return True
+
+
 def _maybe_resume(args, wgt_dir, model, optimizer, scheduler, scaler, criterion, device):
     """
     Retoma o treinamento se houver um checkpoint salvo em weights/.
 
-    Procura, em ordem: o caminho explícito --resume_path (se dado), depois
-    'best_model.pth' e 'last_model.pth' dentro de wgt_dir. Restaura pesos do
-    modelo, optimizer, scheduler, scaler (AMP), os parâmetros de peso de tarefa
-    do criterion (MultitaskLoss) e o histórico. Define a época de início.
-
-    Verifica compatibilidade da TAREFA: se o checkpoint foi treinado para outra
-    task (ex.: multitask vs classification), as cabeças diferem e os pesos não
-    casam — nesse caso avisa e começa do zero (sem restaurar), em vez de quebrar.
+    Ordem:
+      1. --resume True + (--resume_path | best/last em wgt_dir) → resume completo
+         (pesos + optimizer + época).
+      2. Senão, se --init_from → finetune (só pesos; época recomeça em 1).
+      3. Senão → treino do zero.
 
     Retorna (start_epoch, best_val_loss, history).
     """
@@ -2604,103 +2659,84 @@ def _maybe_resume(args, wgt_dir, model, optimizer, scheduler, scaler, criterion,
     best_val_loss = float('inf')
     history       = {'train': [], 'val': []}
 
-    if not getattr(args, 'resume', True):
-        print("[resume] desativado (--resume False) → treino do zero.")
-        return start_epoch, best_val_loss, history
-
-    # localiza o checkpoint
+    # ── 1) resume completo (mesmo run / caminho explícito) ────
     ckpt_path = None
-    if getattr(args, 'resume_path', '') :
-        if os.path.isfile(args.resume_path):
-            ckpt_path = args.resume_path
-        else:
-            print(f"[resume] --resume_path não encontrado: {args.resume_path}")
-    if ckpt_path is None:
-        for name in ('best_model.pth', 'last_model.pth'):
-            cand = os.path.join(wgt_dir, name)
-            if os.path.isfile(cand):
-                ckpt_path = cand
-                break
+    if getattr(args, 'resume', True):
+        if getattr(args, 'resume_path', ''):
+            if os.path.isfile(args.resume_path):
+                ckpt_path = args.resume_path
+            else:
+                print(f"[resume] --resume_path não encontrado: {args.resume_path}")
+        if ckpt_path is None:
+            for name in ('best_model.pth', 'last_model.pth'):
+                cand = os.path.join(wgt_dir, name)
+                if os.path.isfile(cand):
+                    ckpt_path = cand
+                    break
+    else:
+        print("[resume] desativado (--resume False).")
 
-    if ckpt_path is None:
-        print(f"[resume] nenhum checkpoint em {wgt_dir} → treino do zero.")
+    if ckpt_path is not None:
+        print(f"[resume] checkpoint encontrado: {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+
+        if not _check_ckpt_compat(ckpt_path, ckpt, args, mode='resume'):
+            if _maybe_init_from(args, model, criterion, device):
+                return 1, float('inf'), history
+            return start_epoch, best_val_loss, history
+
+        _load_model_weights(ckpt, model, tag='resume')
+
+        if 'optimizer' in ckpt and ckpt['optimizer'] is not None:
+            try:
+                optimizer.load_state_dict(ckpt['optimizer'])
+            except Exception as e:
+                print(f"  [resume][WARN] não restaurou optimizer ({e}).")
+        if 'scheduler' in ckpt and ckpt['scheduler'] is not None:
+            try:
+                scheduler.load_state_dict(ckpt['scheduler'])
+            except Exception as e:
+                print(f"  [resume][WARN] não restaurou scheduler ({e}).")
+        if scaler is not None and ckpt.get('scaler') is not None:
+            try:
+                scaler.load_state_dict(ckpt['scaler'])
+            except Exception as e:
+                print(f"  [resume][WARN] não restaurou scaler AMP ({e}).")
+
+        if ckpt.get('criterion') is not None and hasattr(criterion, 'load_state_dict'):
+            try:
+                criterion.load_state_dict(ckpt['criterion'])
+            except Exception as e:
+                print(f"  [resume][WARN] não restaurou estado do criterion ({e}).")
+
+        last_epoch    = int(ckpt.get('epoch', 0))
+        start_epoch   = last_epoch + 1
+        best_val_loss = float(ckpt.get('best_val_loss', ckpt.get('val_loss', float('inf'))))
+        if isinstance(ckpt.get('history'), dict):
+            history = ckpt['history']
+        split_now  = (getattr(args, 'val_fraction', None), getattr(args, 'val_block_size', None))
+        ckpt_args  = ckpt.get('args', {})
+        split_ckpt = (ckpt_args.get('val_fraction'), ckpt_args.get('val_block_size'))
+        if getattr(args, 'on_the_fly', False) and split_ckpt != split_now:
+            print(f"  ⚠️  split de validação mudou {split_ckpt} → {split_now}: "
+                  f"melhor val_loss reiniciado (o valor salvo não é comparável).")
+            best_val_loss = float('inf')
+
+        print(f"  ✓ Retomando da época {start_epoch} "
+              f"(melhor val_loss até agora: {best_val_loss:.4f})")
+        if start_epoch > args.epochs:
+            print(f"  ⚠️  start_epoch ({start_epoch}) > --epochs ({args.epochs}); "
+                  f"nada a treinar. Aumente --epochs para continuar.")
         return start_epoch, best_val_loss, history
 
-    print(f"[resume] checkpoint encontrado: {ckpt_path}")
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    # ── 2) finetune a partir de outro run ─────────────────────
+    if _maybe_init_from(args, model, criterion, device):
+        return 1, float('inf'), history
 
-    # ── compatibilidade de task ───────────────────────────────
-    ckpt_args = ckpt.get('args', {})
-    ckpt_task = ckpt_args.get('task', None)
-    if ckpt_task is not None and ckpt_task != args.task:
-        print(f"  ⚠️  Task do checkpoint ('{ckpt_task}') ≠ task atual ('{args.task}'). "
-              f"As cabeças diferem; iniciando do zero para evitar incompatibilidade.")
-        return start_epoch, best_val_loss, history
-
-    # ── compatibilidade da normalização RGB ───────────────────
-    # Pesos treinados com outra escala de entrada não servem; e "começar do
-    # zero" aqui sobrescreveria o best_model.pth existente. Então para.
-    for key, what in (('rgb_norm', 'RGB'), ('lidar_norm', 'LiDAR')):
-        ckpt_norm = ckpt_args.get(key, None)
-        if ckpt_norm is not None and ckpt_norm != getattr(args, key, None):
-            sys.exit(f"[resume] o checkpoint {ckpt_path} foi treinado com normalização "
-                     f"{what} '{ckpt_norm}', mas a atual é '{getattr(args, key, None)}'. "
-                     f"Use outro --model_dir (ou --resume False para sobrescrevê-lo).")
-
-    # ── pesos do modelo ───────────────────────────────────────
-    state = ckpt.get('state_dict', ckpt)
-    state = {k.replace('module.', ''): v for k, v in state.items()}
-    missing, unexpected = model.load_state_dict(state, strict=False)
-    if missing:
-        print(f"  [resume][WARN] chaves ausentes: {missing[:4]}{'...' if len(missing)>4 else ''}")
-    if unexpected:
-        print(f"  [resume][WARN] chaves inesperadas: {unexpected[:4]}{'...' if len(unexpected)>4 else ''}")
-
-    # ── optimizer / scheduler / scaler ────────────────────────
-    if 'optimizer' in ckpt and ckpt['optimizer'] is not None:
-        try:
-            optimizer.load_state_dict(ckpt['optimizer'])
-        except Exception as e:
-            print(f"  [resume][WARN] não restaurou optimizer ({e}).")
-    if 'scheduler' in ckpt and ckpt['scheduler'] is not None:
-        try:
-            scheduler.load_state_dict(ckpt['scheduler'])
-        except Exception as e:
-            print(f"  [resume][WARN] não restaurou scheduler ({e}).")
-    if scaler is not None and ckpt.get('scaler') is not None:
-        try:
-            scaler.load_state_dict(ckpt['scaler'])
-        except Exception as e:
-            print(f"  [resume][WARN] não restaurou scaler AMP ({e}).")
-
-    # ── pesos de tarefa aprendíveis (MultitaskLoss) ───────────
-    if ckpt.get('criterion') is not None and hasattr(criterion, 'load_state_dict'):
-        try:
-            criterion.load_state_dict(ckpt['criterion'])
-        except Exception as e:
-            print(f"  [resume][WARN] não restaurou estado do criterion ({e}).")
-
-    # ── época / melhor perda / histórico ──────────────────────
-    last_epoch    = int(ckpt.get('epoch', 0))
-    start_epoch   = last_epoch + 1
-    best_val_loss = float(ckpt.get('best_val_loss', ckpt.get('val_loss', float('inf'))))
-    if isinstance(ckpt.get('history'), dict):
-        history = ckpt['history']
-    # Split de validação diferente (ex.: checkpoint antigo sem validação, cujo
-    # "val_loss" era a loss de TREINO): o melhor valor salvo não é comparável.
-    split_now  = (getattr(args, 'val_fraction', None), getattr(args, 'val_block_size', None))
-    split_ckpt = (ckpt_args.get('val_fraction'), ckpt_args.get('val_block_size'))
-    if getattr(args, 'on_the_fly', False) and split_ckpt != split_now:
-        print(f"  ⚠️  split de validação mudou {split_ckpt} → {split_now}: "
-              f"melhor val_loss reiniciado (o valor salvo não é comparável).")
-        best_val_loss = float('inf')
-
-    print(f"  ✓ Retomando da época {start_epoch} "
-          f"(melhor val_loss até agora: {best_val_loss:.4f})")
-    if start_epoch > args.epochs:
-        print(f"  ⚠️  start_epoch ({start_epoch}) > --epochs ({args.epochs}); "
-              f"nada a treinar. Aumente --epochs para continuar.")
+    # ── 3) do zero ────────────────────────────────────────────
+    print(f"[resume] nenhum checkpoint em {wgt_dir} e sem --init_from → treino do zero.")
     return start_epoch, best_val_loss, history
+
 
 
 def _resolve_ignore(args):
@@ -3676,6 +3712,11 @@ def get_args():
     p.add_argument('--resume_path', type=str, default='',
                    help='Caminho explícito de um checkpoint para retomar. Se vazio, '
                         'procura best_model.pth / last_model.pth em <model_dir>/weights.')
+    p.add_argument('--init_from', type=str, default='',
+                   help='Finetune: carrega só os pesos deste .pth (outro run) e treina '
+                        'épocas 1..N neste model_dir. Não restaura optimizer/época. '
+                        'Se já houver best/last local e --resume True, o resume local '
+                        'tem prioridade (útil após Ctrl+C no finetune).')
 
     return p.parse_args()
 

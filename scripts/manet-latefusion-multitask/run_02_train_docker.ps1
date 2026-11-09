@@ -1,4 +1,4 @@
-﻿# Etapa 2 - treino MANet late fusion. Pasta = EXPERIMENT_NAME (v2 nao sobrescreve v1).
+# Etapa 2 - treino MANet late fusion. Pasta = EXPERIMENT_NAME (v2 nao sobrescreve v1).
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 . .\_load_aoi.ps1

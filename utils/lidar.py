@@ -248,6 +248,145 @@ def run_pdal_pipeline(pipeline: dict) -> int:
     return int(n_points)
 
 
+def _first_return_stages(
+    laz_path: str,
+    target_epsg: Optional[int],
+    in_srs: Optional[int],
+) -> tuple[list, str]:
+    """Reader → (reproject) → drop noise 7/18 → ReturnNumber==1. Returns (stages, last_tag)."""
+    reader: dict = {"type": "readers.las", "filename": laz_path, "tag": "src_raw"}
+    if in_srs is not None:
+        reader["default_srs"] = f"EPSG:{in_srs}"
+    stages: list = [reader]
+    last_tag = "src_raw"
+    need_reproj = (
+        target_epsg is not None
+        and (in_srs is None or int(in_srs) != int(target_epsg))
+    )
+    if need_reproj:
+        stages.append({
+            "type": "filters.reprojection",
+            "inputs": last_tag,
+            "out_srs": f"EPSG:{target_epsg}",
+            "tag": "src_proj",
+        })
+        last_tag = "src_proj"
+    stages.append({
+        "type": "filters.range",
+        "inputs": last_tag,
+        "limits": "Classification![7:7],Classification![18:18]",
+        "tag": "src_clean",
+    })
+    stages.append({
+        "type": "filters.range",
+        "inputs": "src_clean",
+        "limits": "ReturnNumber[1:1]",
+        "tag": "src_first",
+    })
+    return stages, "src_first"
+
+
+def refine_dsm_to_percentile(
+    laz_path: str,
+    dsm_path: str,
+    percentile: float = 99.0,
+    target_epsg: Optional[int] = None,
+    in_srs: Optional[int] = None,
+    chunk_rows: int = 400,
+    log=None,
+) -> int:
+    """Overwrite a PDAL-written DSM with cell-wise percentile (1st return, no noise).
+
+    Uses the existing GeoTIFF grid (same as DTM) so CHM stays aligned. Points are
+    read in row-chunks via ``filters.crop`` to keep RAM bounded (PDAL 2.9-safe).
+    """
+    import pdal  # type: ignore
+
+    ds = gdal.Open(dsm_path, gdalconst.GA_Update)
+    if ds is None:
+        raise FileNotFoundError(f"Cannot open DSM for p-refine: {dsm_path}")
+    band = ds.GetRasterBand(1)
+    nodata = band.GetNoDataValue()
+    if nodata is None:
+        nodata = -9999.0
+    gt = ds.GetGeoTransform()
+    width, height = ds.RasterXSize, ds.RasterYSize
+    xmin, res_x, _, ymax, _, res_y = gt
+    res = float(res_x)
+    if res <= 0:
+        raise ValueError(f"Invalid DSM geotransform on {dsm_path}: {gt}")
+
+    out = np.full((height, width), float(nodata), dtype=np.float32)
+    total_pts = 0
+    base_stages, last_tag = _first_return_stages(laz_path, target_epsg, in_srs)
+
+    for r0 in range(0, height, chunk_rows):
+        r1 = min(height, r0 + chunk_rows)
+        # north-up: row 0 at ymax
+        y_top = ymax - r0 * res
+        y_bot = ymax - r1 * res
+        x_left = xmin
+        x_right = xmin + width * res
+        stages = list(base_stages)
+        stages.append({
+            "type": "filters.crop",
+            "inputs": last_tag,
+            "bounds": f"([{x_left},{x_right}],[{y_bot},{y_top}])",
+            "tag": "src_chunk",
+        })
+        pipe = pdal.Pipeline(json.dumps({"pipeline": stages}))
+        n = int(pipe.execute())
+        total_pts += n
+        if n <= 0:
+            continue
+        arr = pipe.arrays[0]
+        x = np.asarray(arr["X"], dtype=np.float64)
+        y = np.asarray(arr["Y"], dtype=np.float64)
+        z = np.asarray(arr["Z"], dtype=np.float64)
+        cols = np.floor((x - xmin) / res).astype(np.int64)
+        rows = np.floor((ymax - y) / res).astype(np.int64)
+        valid = (
+            (cols >= 0) & (cols < width)
+            & (rows >= r0) & (rows < r1)
+            & np.isfinite(z)
+        )
+        if not np.any(valid):
+            continue
+        cols = cols[valid]
+        rows = rows[valid]
+        z = z[valid]
+        # cell id local to this row block
+        local_row = rows - r0
+        n_local = (r1 - r0) * width
+        cell = local_row * width + cols
+        order = np.argsort(cell, kind="mergesort")
+        cell_s = cell[order]
+        z_s = z[order]
+        # group by cell
+        uniq, start_idx = np.unique(cell_s, return_index=True)
+        start_idx = np.r_[start_idx, len(cell_s)]
+        for i, cid in enumerate(uniq):
+            a, b = int(start_idx[i]), int(start_idx[i + 1])
+            zz = z_s[a:b]
+            if zz.size == 0:
+                continue
+            val = float(np.percentile(zz, percentile)) if zz.size > 1 else float(zz[0])
+            rr = r0 + int(cid // width)
+            cc = int(cid % width)
+            out[rr, cc] = val
+        del arr, x, y, z, cols, rows, cell, order, cell_s, z_s
+        import gc
+        gc.collect()
+
+    band.WriteArray(out)
+    band.SetNoDataValue(float(nodata))
+    ds.FlushCache()
+    ds = None
+    if log:
+        log(f"  DSM p{percentile:g} (Python) ok — {total_pts:,} 1st-return pts")
+    return total_pts
+
+
 def _read_band(path: str) -> tuple[np.ndarray, float]:
     """Return ``(array, nodata_value)`` for a single-band raster."""
     ds = gdal.Open(path, gdalconst.GA_ReadOnly)

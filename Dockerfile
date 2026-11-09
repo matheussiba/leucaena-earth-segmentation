@@ -26,11 +26,13 @@ WORKDIR /workspace
 # PDAL pulls sqlite 3.32.x, which breaks Python sqlite3 until we reinstall sqlite.
 # After GDAL/PDAL, conda plugins may fail; use --solver classic + CONDA_NO_PLUGINS
 # only for the sqlite repair step. Never run `conda clean` here (use rm below).
-# PDAL >= 2.10: writers.gdal output_type=p99 + binmode (DSM do prep-lidar-scene).
-# Sem isso o pipeline cai no fallback max (spikes).
+#
+# NÃO pinamos pdal>=2.10 aqui: na base pytorch o solve quebra (fmt/TileDB vs
+# libmamba). writers.gdal p99 fica para PDAL novo quando o env permitir; com
+# 2.9.x o prep-lidar-scene calcula p99 em Python (mesmo grid do DTM).
 RUN conda install -y -c conda-forge \
         gdal proj proj-data libstdcxx-ng \
-        "pdal>=2.10.2" python-pdal \
+        pdal python-pdal \
     && CONDA_NO_PLUGINS=1 conda install -y -c conda-forge --solver classic \
         "sqlite>=3.45.0" "libsqlite>=3.45.0" \
     && python -c "import sqlite3; print('sqlite3 OK', sqlite3.sqlite_version)" \

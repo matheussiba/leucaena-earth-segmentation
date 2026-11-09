@@ -54,6 +54,7 @@ from utils.lidar import (
     build_single_writer_pipeline,
     compute_chm,
     normalise_stem,
+    refine_dsm_to_percentile,
     run_pdal_pipeline,
 )
 
@@ -130,22 +131,34 @@ def _run_product(laz, out_path, product, res, target_epsg, in_srs, bounds,
     try:
         return _go(dsm_stat)
     except Exception as exc:  # noqa: BLE001
-        # PDAL antigo: sem percentile / binmode → cai no max (ainda 1º retorno)
+        # PDAL < 2.10: sem percentile no writers.gdal.
+        # 1) grava DSM com max (mesmo grid do DTM); 2) sobrescreve com pXX em Python.
         msg = str(exc).lower()
         want_pct = str(dsm_stat).lower().startswith("p")
         if want_pct and dsm_stat.lower() != "max" and (
             "percentile" in msg or "binmode" in msg or "p99" in msg
             or "output type" in msg or "invalid" in msg
         ):
+            pct = float(str(dsm_stat).lstrip("pP"))
             if log:
                 log(f"  [warn] PDAL sem {dsm_stat} ({type(exc).__name__}: {exc})")
-                log("  [warn] DSM fallback: 1º retorno + max (atualize PDAL p/ p99)")
+                log(f"  [warn] DSM fallback: grid via max + p{pct:g} em Python "
+                    f"(1º retorno, sem classes 7/18)")
             if os.path.isfile(out_path):
                 try:
                     os.remove(out_path)
                 except OSError:
                     pass
-            return _go("max")
+            n = _go("max")
+            refine_dsm_to_percentile(
+                laz_path=laz,
+                dsm_path=out_path,
+                percentile=pct,
+                target_epsg=target_epsg,
+                in_srs=in_srs,
+                log=log,
+            )
+            return n
         raise
 
 
@@ -247,6 +260,7 @@ def main() -> None:
                 log(f"  bounds={bounds[0]:.1f},{bounds[1]:.1f},{bounds[2]:.1f},{bounds[3]:.1f}")
                 n = _run_product(laz, dsm_p, "dsm", args.resolution, grid.epsg_code,
                                  laz_epsg, bounds, dsm_stat="p99", log=log)
+                # Mensagem detalhada de p99 nativo vs Python vem do _run_product/refine.
                 log(f"  dsm  ok ({n:,} pts) [1st return + p99]")
                 _run_product(laz, dtm_p, "dtm", args.resolution, grid.epsg_code,
                              laz_epsg, bounds, log=log)

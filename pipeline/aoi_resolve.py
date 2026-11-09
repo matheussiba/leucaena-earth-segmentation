@@ -314,16 +314,51 @@ def read_vector(path: Path):
     )
 
 
+def _fix_geoms(gdf, *, label: str):
+    """Repara geometrias invalidas (self-intersect etc.) antes de clip/union."""
+    import geopandas as gpd
+    from shapely import make_valid
+    from shapely.geometry.base import BaseGeometry
+
+    if gdf.empty:
+        return gdf
+    invalid = ~gdf.geometry.is_valid
+    n_bad = int(invalid.sum()) if hasattr(invalid, "sum") else 0
+    if n_bad:
+        print(f"[resolve] {label}: {n_bad} geometria(s) invalida(s) → make_valid")
+        fixed = gdf.geometry.apply(
+            lambda g: make_valid(g) if isinstance(g, BaseGeometry) and g is not None and not g.is_empty and not g.is_valid else g
+        )
+        gdf = gdf.set_geometry(fixed)
+    # drop empties after fix
+    gdf = gdf[~gdf.geometry.is_empty & gdf.geometry.notna()].copy()
+    return gdf
+
+
 def clip_annotations(annot_path: Path, clip_gpkg: Path, out_path: Path) -> dict:
     import geopandas as gpd
+    from shapely import make_valid
 
-    clip = read_vector(clip_gpkg)
-    ann = read_vector(annot_path)
+    clip = _fix_geoms(read_vector(clip_gpkg), label="AOI/mask clip")
+    ann = _fix_geoms(read_vector(annot_path), label="annotations")
     if ann.crs != clip.crs:
         clip = clip.to_crs(ann.crs)
     clip_union = clip.geometry.union_all() if hasattr(clip.geometry, "union_all") \
         else clip.geometry.unary_union
-    clipped = gpd.clip(ann, clip_union)
+    if clip_union is None or clip_union.is_empty:
+        raise SystemExit(f"[ABORT] AOI/mask sem geometria apos make_valid: {clip_gpkg}")
+    if not clip_union.is_valid:
+        clip_union = make_valid(clip_union)
+    try:
+        clipped = gpd.clip(ann, clip_union)
+    except Exception as exc:  # noqa: BLE001
+        # ultimo recurso: buffer(0) no mask (fecha aneis) e retry
+        print(f"[resolve] clip falhou ({type(exc).__name__}: {exc}); retry buffer(0)")
+        clip_union = make_valid(clip_union.buffer(0))
+        ann = ann.set_geometry(ann.geometry.apply(
+            lambda g: make_valid(g.buffer(0)) if g is not None and not g.is_empty else g
+        ))
+        clipped = gpd.clip(ann, clip_union)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     clipped.to_file(out_path, driver="GPKG")
     return {"features_in": len(ann), "features_out": len(clipped),

@@ -423,7 +423,10 @@ def phase_train(lay, cfg, aoi, res, run, runtime, dry=False):
         "--chm_resolution", str(cfg.get("chm_resolution", 0.25)),
         "--patch_size", str(cfg.get("patch_size", 512)),
         "--epochs", str(cfg.get("epochs", 60)),
-        "--lr", str(cfg.get("lr", 1e-4)),
+        # SGD usa --base_lr (peak do warmup+cosine). yaml `lr` (e opcional
+        # `base_lr`) alimenta os dois; só --lr era ignorado e caía no default 0.01.
+        "--lr", str(cfg.get("base_lr", cfg.get("lr", 1e-4))),
+        "--base_lr", str(cfg.get("base_lr", cfg.get("lr", 1e-4))),
         "--batch_size", str(pconf.get("batch", 2)),
         "--num_workers", str(pconf.get("workers", 2)),
         "--prefetch_factor", str(pconf.get("prefetch", 2)),

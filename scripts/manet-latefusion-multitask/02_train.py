@@ -2256,7 +2256,7 @@ class SegmentationLoss(nn.Module):
 # 6.  Metrics
 # ─────────────────────────────────────────────────────────────
 def compute_regression_metrics(pred, target, mask=None):
-    """RMSE and MAE for valid pixels."""
+    """RMSE and MAE for valid pixels. Empty mask → (nan, nan), sem warning."""
     if isinstance(pred,   torch.Tensor): pred   = pred.cpu().numpy()
     if isinstance(target, torch.Tensor): target = target.cpu().numpy()
     if isinstance(mask,   torch.Tensor): mask   = mask.cpu().numpy()
@@ -2266,9 +2266,11 @@ def compute_regression_metrics(pred, target, mask=None):
     if mask is not None:
         pred   = pred[mask]
         target = target[mask]
-    diff   = pred.flatten() - target.flatten()
-    rmse   = float(np.sqrt((diff ** 2).mean()))
-    mae    = float(np.abs(diff).mean())
+    diff = pred.flatten() - target.flatten()
+    if diff.size == 0:
+        return float('nan'), float('nan')
+    rmse = float(np.sqrt(np.mean(diff ** 2)))
+    mae  = float(np.mean(np.abs(diff)))
     return rmse, mae
 
 
@@ -2404,6 +2406,7 @@ def run_epoch(model, loader, criterion, optimizer, device,
     do_clf = task in ('multitask', 'classification')
 
     total_loss = 0.0
+    n_ok = 0
     all_details: dict = {}
     all_rmse, all_mae, all_miou = [], [], []
 
@@ -2543,6 +2546,7 @@ def run_epoch(model, loader, criterion, optimizer, device,
                     optimizer.step()
 
             total_loss += loss.item()
+            n_ok += 1
 
             # ── Metrics ───────────────────────────────────────
             if do_reg:
@@ -2568,14 +2572,28 @@ def run_epoch(model, loader, criterion, optimizer, device,
                     vis_aug_target = _first_aug.squeeze(1)  # (B, H, W) real+pseudo
 
     n = len(loader)
-    metrics = {'loss': total_loss / n}
+    n_bad = int(all_details.get('n_nonfinite_batches', 0))
+    # Só batches com loss finita entram na média — senão val_loss=0.0 falso
+    # (todos descartados) e vira "best" corrompendo best_model.pth.
+    metrics = {
+        'loss': (total_loss / n_ok) if n_ok > 0 else float('nan'),
+        'n_ok_batches': n_ok,
+        'n_nonfinite_batches': n_bad,
+        'finite_frac': (n_ok / n) if n > 0 else 0.0,
+    }
     if do_reg:
-        metrics['rmse'] = float(np.mean(all_rmse))
-        metrics['mae']  = float(np.mean(all_mae))
+        finite_rmse = [x for x in all_rmse if np.isfinite(x)]
+        finite_mae  = [x for x in all_mae  if np.isfinite(x)]
+        metrics['rmse'] = float(np.mean(finite_rmse)) if finite_rmse else float('nan')
+        metrics['mae']  = float(np.mean(finite_mae))  if finite_mae  else float('nan')
     if do_clf:
-        metrics['miou'] = float(np.mean(all_miou))
-    if all_details:
-        metrics.update({k: v / n for k, v in all_details.items()})
+        finite_miou = [x for x in all_miou if np.isfinite(x)]
+        metrics['miou'] = float(np.mean(finite_miou)) if finite_miou else float('nan')
+    # detalhes de loss (ce/dice/…) — média só sobre batches ok
+    for k, v in list(all_details.items()):
+        if k == 'n_nonfinite_batches':
+            continue
+        metrics[k] = (v / n_ok) if n_ok > 0 else float('nan')
 
     vis_data = (vis_img, vis_reg_gt, vis_seg_gt, vis_reg_pred, vis_seg_pred,
                 vis_aug_target)
@@ -3156,15 +3174,17 @@ def train(args):
                                   loss_type=args.reg_loss).to(device)
 
     # ── Optimiser & LR scheduler ──────────────────────────────
-    #optimizer = torch.optim.AdamW(
-    #    optimizer_params,
-    #    lr           = args.lr,
-    #    weight_decay = args.weight_decay,
-    #)
-    
-    # region OPTIMIZER
+    # SGD peak LR = base_lr (warmup → base_lr → cosine). experiment.yaml
+    # só costuma setar `lr`; phd-run agora passa --base_lr também. Se ainda
+    # vier só --lr (scripts antigos), não deixe o default base_lr=0.01
+    # explodir o finetune (era o bug do run-002: LR 2e-3…1e-2).
+    if abs(float(args.base_lr) - 0.01) < 1e-15 and abs(float(args.lr) - 0.01) > 1e-15:
+        print(f"[lr] --base_lr default 0.01 ignorado; usando --lr={args.lr} como peak")
+        args.base_lr = float(args.lr)
+    print(f"[lr] peak(base_lr)={args.base_lr:.2e} | warmup={args.warmup_epochs} ep "
+          f"| cosine até época {args.epochs}")
+
     # Very important! Only with SGD the regression model is capable of capturing multiple crowns
-    
     optimizer = torch.optim.SGD(
         model.parameters(),
         lr=args.base_lr,
@@ -3236,11 +3256,23 @@ def train(args):
         history['train'].append(train_metrics)
         history['val'].append(val_metrics)
 
+        # Explosão numérica: maioria dos batches descartados → pesos provavelmente NaN
+        tr_frac = float(train_metrics.get('finite_frac', 1.0))
+        if tr_frac < 0.5:
+            sys.exit(
+                f"[ABORT] só {tr_frac:.0%} dos batches de treino tiveram loss finita "
+                f"(época {epoch}). Modelo provavelmente corrompido (LR alto / NaN). "
+                f"Confira [lr] peak≈1e-4 no finetune, apague weights/ deste run e "
+                f"reinicie com --resume False (ou run novo)."
+            )
+
         # ── Print metrics ─────────────────────────────────────
         def _fmt(m):
-            s = f"loss={m['loss']:.4f}"
-            if 'rmse' in m: s += f"  rmse={m['rmse']:.4f}  mae={m['mae']:.4f}"
-            if 'miou' in m: s += f"  mIoU={m['miou']:.4f}"
+            def _f(x):
+                return f"{x:.4f}" if x is not None and np.isfinite(x) else "nan"
+            s = f"loss={_f(m['loss'])}"
+            if 'rmse' in m: s += f"  rmse={_f(m['rmse'])}  mae={_f(m['mae'])}"
+            if 'miou' in m: s += f"  mIoU={_f(m['miou'])}"
             return s
 
         print(f"  Train → {_fmt(train_metrics)}")
@@ -3253,14 +3285,22 @@ def train(args):
         # ── Checkpoint: best weights ──────────────────────────
         # Regressão → seleciona pelo MAE dentro das copas (dist>0).
         # Demais tasks → seleciona pela loss de validação.
+        # Nunca promover best com métrica não-finita (ex.: todos os batches val
+        # descartados → loss era 0.0 e sobrescrevia um best bom).
         if select_by_reg and ('mae' in val_metrics):
             cur_metric  = val_metrics['mae']
-            is_best     = cur_metric < best_reg_mae
             metric_name = 'val_mae(copa)'
         else:
             cur_metric  = val_metrics['loss']
-            is_best     = cur_metric < best_val_loss
             metric_name = 'val_loss'
+
+        if not np.isfinite(cur_metric):
+            is_best = False
+            print(f"  ⚠️  {metric_name} não-finita — best_model NÃO atualizado")
+        elif select_by_reg and ('mae' in val_metrics):
+            is_best = cur_metric < best_reg_mae
+        else:
+            is_best = cur_metric < best_val_loss
 
         if is_best:
             if select_by_reg and ('mae' in val_metrics):

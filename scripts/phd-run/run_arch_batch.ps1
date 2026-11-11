@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # Batch: mesma AOI (+ mask) x todas as redes, patch 256, 30 ep, run-001
 # -----------------------------------------------------------------------------
 # Referencia unica: PHD_RUN_ROOT/experiments/experiment-batch.yaml
@@ -37,7 +37,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $repoRoot
 
-# ---- .env → PHD_RUN_ROOT ----------------------------------------------------
+# ---- .env -> PHD_RUN_ROOT ----------------------------------------------------
 $envFile = Join-Path $repoRoot ".env"
 if (-not (Test-Path $envFile)) { throw "Falta .env na raiz do repo." }
 $vars = @{}
@@ -165,7 +165,7 @@ foreach ($arch in $archList) {
         Write-Host "[OK] $exp"
     } catch {
         "FAIL $exp :: $($_.Exception.Message)" | Add-Content $summary -Encoding UTF8
-        Write-Host "[FAIL] $exp — $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "[FAIL] $exp - $($_.Exception.Message)" -ForegroundColor Red
         Write-Host "Continuando com a proxima rede..."
     }
 }
@@ -173,6 +173,6 @@ foreach ($arch in $archList) {
 "finished=$(Get-Date -Format o)" | Add-Content $summary -Encoding UTF8
 Write-Host "`n============================================================"
 Write-Host " Batch concluido. Resumo: $summary"
-Write-Host " Modelos: $expRoot\<rede>\$expName\$run\models"
+Write-Host (" Modelos: {0}\<rede>\{1}\{2}\models" -f $expRoot, $expName, $run)
 Write-Host " Edite a referencia em: $refYaml"
 Write-Host "============================================================"

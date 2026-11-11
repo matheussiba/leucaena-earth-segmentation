@@ -415,6 +415,11 @@ def phase_train(lay, cfg, aoi, res, run, runtime, dry=False):
         "--task_classification", str(task == "classification"),
         "--task_regression", str(task == "regression"),
         "--num_classes", str(cfg.get("num_classes", 6)),
+        # Classe reportada por época (IoU/F1); default = chm_filter_class / 1 (leucaena)
+        "--report_class", str(
+            cfg.get("report_class",
+                    (cfg.get("labels") or {}).get("chm_filter_class", 1))
+        ),
         "--rgb_norm_method", str(cfg.get("rgb_norm_method", "minmax")),
         "--lidar_norm", str(cfg.get("lidar_norm", "minmax")),
         "--class_weights", str(cfg.get("class_weights", "inverse")),

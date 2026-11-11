@@ -2295,6 +2295,37 @@ def compute_segmentation_metrics(pred_logits, target, num_classes, ignore_index=
     return float(np.mean(iou_per_class)) if iou_per_class else 0.0
 
 
+def compute_binary_class_counts(pred_logits, target, class_id, ignore_index=0):
+    """TP/FP/FN para uma classe alvo (ex.: 1 = leucaena), ignorando ignore_index."""
+    if isinstance(pred_logits, torch.Tensor):
+        pred_cls = pred_logits.argmax(dim=1).cpu().numpy()
+    else:
+        pred_cls = np.argmax(pred_logits, axis=1)
+    if isinstance(target, torch.Tensor):
+        target = target.cpu().numpy()
+    valid = target != ignore_index
+    pred_pos = (pred_cls == class_id) & valid
+    true_pos = (target == class_id) & valid
+    tp = int((pred_pos & true_pos).sum())
+    fp = int((pred_pos & ~true_pos).sum())
+    fn = int((~pred_pos & true_pos).sum())
+    return tp, fp, fn
+
+
+def scores_from_counts(tp, fp, fn):
+    """IoU / precision / recall / F1 a partir de contagens (nan se indefinido)."""
+    tp, fp, fn = float(tp), float(fp), float(fn)
+    union = tp + fp + fn
+    iou = (tp / union) if union > 0 else float('nan')
+    prec = (tp / (tp + fp)) if (tp + fp) > 0 else float('nan')
+    rec = (tp / (tp + fn)) if (tp + fn) > 0 else float('nan')
+    if np.isfinite(prec) and np.isfinite(rec) and (prec + rec) > 0:
+        f1 = 2.0 * prec * rec / (prec + rec)
+    else:
+        f1 = float('nan')
+    return {'iou': iou, 'precision': prec, 'recall': rec, 'f1': f1}
+
+
 # ─────────────────────────────────────────────────────────────
 # 7.  Training / Validation loops
 # ─────────────────────────────────────────────────────────────
@@ -2399,7 +2430,7 @@ def generate_pseudo_targets(teacher, imgs, dists,
 
 def run_epoch(model, loader, criterion, optimizer, device,
               num_classes, ignore_index, is_train: bool,
-              task: str, scaler=None, teacher=None):
+              task: str, scaler=None, teacher=None, report_class: int = 1):
     model.train() if is_train else model.eval()
 
     do_reg = task in ('multitask', 'regression')
@@ -2409,6 +2440,8 @@ def run_epoch(model, loader, criterion, optimizer, device,
     n_ok = 0
     all_details: dict = {}
     all_rmse, all_mae, all_miou = [], [], []
+    # Contagens agregadas da classe de interesse (leucaena=1 por padrão)
+    cls_tp = cls_fp = cls_fn = 0
 
     # Collect a batch for visualisation
     vis_img = vis_reg_gt = vis_seg_gt = vis_reg_pred = vis_seg_pred = None
@@ -2558,6 +2591,9 @@ def run_epoch(model, loader, criterion, optimizer, device,
                 miou = compute_segmentation_metrics(
                     seg_logits.detach(), labels, num_classes, ignore_index)
                 all_miou.append(miou)
+                tp, fp, fn = compute_binary_class_counts(
+                    seg_logits.detach(), labels, report_class, ignore_index)
+                cls_tp += tp; cls_fp += fp; cls_fn += fn
 
             # ── Save first batch for visualisation ────────────
             if batch_idx == 0:
@@ -2589,6 +2625,15 @@ def run_epoch(model, loader, criterion, optimizer, device,
     if do_clf:
         finite_miou = [x for x in all_miou if np.isfinite(x)]
         metrics['miou'] = float(np.mean(finite_miou)) if finite_miou else float('nan')
+        cls_scores = scores_from_counts(cls_tp, cls_fp, cls_fn)
+        metrics['report_class'] = int(report_class)
+        metrics['cls_iou'] = cls_scores['iou']
+        metrics['cls_precision'] = cls_scores['precision']
+        metrics['cls_recall'] = cls_scores['recall']
+        metrics['cls_f1'] = cls_scores['f1']
+        metrics['cls_tp'] = cls_tp
+        metrics['cls_fp'] = cls_fp
+        metrics['cls_fn'] = cls_fn
     # detalhes de loss (ce/dice/…) — média só sobre batches ok
     for k, v in list(all_details.items()):
         if k == 'n_nonfinite_batches':
@@ -3183,6 +3228,8 @@ def train(args):
         args.base_lr = float(args.lr)
     print(f"[lr] peak(base_lr)={args.base_lr:.2e} | warmup={args.warmup_epochs} ep "
           f"| cosine até época {args.epochs}")
+    print(f"[report] métricas de seg por época focadas na classe "
+          f"{int(getattr(args, 'report_class', 1))} (treino ainda é multiclasse)")
 
     # Very important! Only with SGD the regression model is capable of capturing multiple crowns
     optimizer = torch.optim.SGD(
@@ -3233,10 +3280,12 @@ def train(args):
         print(f"Epoch {epoch}/{args.epochs}  |  LR: {scheduler.get_last_lr()[0]:.2e}")
 
         # ── Train ─────────────────────────────────────────────
+        report_cls = int(getattr(args, 'report_class', 1))
         train_metrics, train_vis = run_epoch(
             model, train_loader, criterion, optimizer, device,
             args.num_classes, args.effective_ignore_index, is_train=True,
             task=args.task, scaler=scaler, teacher=teacher,
+            report_class=report_cls,
         )
         scheduler.step()
 
@@ -3246,6 +3295,7 @@ def train(args):
                 model, val_loader, criterion, None, device,
                 args.num_classes, args.effective_ignore_index, is_train=False,
                 task=args.task, scaler=None,
+                report_class=report_cls,
             )
         else:
             # Sem validação (modo on-the-fly): usa as métricas de TREINO como
@@ -3266,13 +3316,20 @@ def train(args):
                 f"reinicie com --resume False (ou run novo)."
             )
 
-        # ── Print metrics ─────────────────────────────────────
+        # ── Print metrics (seg focado na classe report_class, ex. leucaena=1) ─
         def _fmt(m):
             def _f(x):
                 return f"{x:.4f}" if x is not None and np.isfinite(x) else "nan"
             s = f"loss={_f(m['loss'])}"
-            if 'rmse' in m: s += f"  rmse={_f(m['rmse'])}  mae={_f(m['mae'])}"
-            if 'miou' in m: s += f"  mIoU={_f(m['miou'])}"
+            if 'rmse' in m:
+                s += f"  rmse={_f(m['rmse'])}  mae={_f(m['mae'])}"
+            # Estatísticas de segmentação = só a classe de interesse (não mIoU global)
+            if 'cls_iou' in m:
+                c = int(m.get('report_class', report_cls))
+                s += (f"  | cls{c} IoU={_f(m['cls_iou'])} F1={_f(m['cls_f1'])} "
+                      f"P={_f(m['cls_precision'])} R={_f(m['cls_recall'])}")
+            elif 'miou' in m:
+                s += f"  mIoU={_f(m['miou'])}"
             return s
 
         print(f"  Train → {_fmt(train_metrics)}")
@@ -3628,6 +3685,10 @@ def get_args():
     p.add_argument('--ignore_class_value', type=int, default=0,
                    help='Qual índice de classe ignorar quando --ignore_index True '
                         '(tipicamente 0 = fundo/no-data).')
+    p.add_argument('--report_class', type=int, default=1,
+                   help='Classe de interesse no log por época (IoU/F1/P/R). '
+                        'Padrão 1 = leucaena. O treino continua multiclasse; '
+                        'só o relatório por época foca nesta classe.')
 
     # Loss weights
     p.add_argument('--w_reg',  type=float, default=1.5, help='Regression loss weight')

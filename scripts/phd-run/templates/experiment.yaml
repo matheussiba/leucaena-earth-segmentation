@@ -9,6 +9,7 @@ fusion: concat                 # concat | gated | xattn  (so com latefusion)
 channels: 4                    # bandas opticas (RGBNIR)
 lidar_channels: 2              # CHM + INTENSITY
 num_classes: 6
+report_class: 1                # log por época: IoU/F1/P/R só desta classe (1=leucaena)
 bands_opt: [B, G, R, NIR]      # documental
 bands_lidar: [CHM, INTENSITY]  # documental
 

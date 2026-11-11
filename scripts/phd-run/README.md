@@ -79,9 +79,14 @@ Debug / engines / buracos TIN: ver
 ## Batch multi-rede (patch 256 / 30 ep / run-001)
 
 Compara todas as arquiteturas na **mesma AOI** (opcional `-mask`), com o mínimo
-de config: clona `manet/latefusion-multitask-p256/experiment.yaml` só mudando
-`network:`, prepara lidar/resolve/labels **uma vez**, depois treina + prediz
-cada rede.
+de config. Referencia unica:
+
+`PHD_RUN_ROOT/experiments/experiment-batch.yaml`
+
+(se nao existir, o batch copia o template do repo). Edite epochs/lr/samples **ali**;
+o batch gera `experiments/<rede>/latefusion-multitask-p256/experiment.yaml` so
+mudando `network:`, prepara lidar/resolve/labels **uma vez**, depois treina +
+prediz cada rede.
 
 ```powershell
 cd <repo>
@@ -96,9 +101,7 @@ cd <repo>
 .\run_arch_batch.cmd -aoi 261002-riodaspedras -mask -DryRun
 ```
 
-Requisito: existir `PHD_RUN_ROOT/experiments/manet/latefusion-multitask-p256/experiment.yaml`
-(referencia). Saida por rede:
-`experiments/<rede>/latefusion-multitask-p256/run-001/`.
+Saida por rede: `experiments/<rede>/latefusion-multitask-p256/run-001/`.
 
 ## Como rodar (raiz do repo)
 

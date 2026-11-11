@@ -1,0 +1,87 @@
+# Referencia do batch multi-rede (run_arch_batch).
+# No PHD_RUN_ROOT: experiments/experiment-batch.yaml
+# O batch copia este arquivo para experiments/<rede>/latefusion-multitask-p256/
+# e so altera a linha network:.
+#
+# Edite AQUI epochs/lr/samples/etc. uma vez — vale para todas as redes.
+
+network: PLACEHOLDER
+task: multitask
+latefusion: true
+fusion: concat
+channels: 4
+lidar_channels: 2
+num_classes: 6
+report_class: 1
+bands_opt: [B, G, R, NIR]
+bands_lidar: [CHM, INTENSITY]
+
+patch_size: 256
+on_the_fly: true
+save_patches: false
+epochs: 30
+lr: 1.0e-4
+pretrained: true
+
+rgb_norm_method: minmax
+lidar_norm: minmax
+class_weights: inverse
+reg_loss: l1
+rgb_resolution: 0.25
+chm_resolution: 0.25
+output_crs: EPSG:31983
+
+labels:
+  version: 1
+  classes_dist_map: [1]
+  dist_map_as_cluster: true
+  cluster_edge_m: 10.0
+  gaussian_sigma: 2
+  chm_min_m: 4.0
+  chm_filter_class: 1
+  train_ratio: 0.8
+
+predict:
+  overlaps: [0.3, 0.5, 0.7]
+  batch_size: 8
+
+post:
+  sigma: 2
+  threshold: 0.5
+  min_size: 500
+  connectivity: 2
+  save_filtered: true
+
+profiles:
+  home: {batch: 2, workers: 2, prefetch: 2, shm: 8gb}
+  lab:  {batch: 4, workers: 8, prefetch: 4, shm: 16gb}
+
+train_extra_args:
+  - --samples
+  - 10000
+  - --val_samples
+  - 2000
+  - --val_fraction
+  - 0.2
+  - --val_block_size
+  - 1024
+  - --oversample
+  - "True"
+  - --save_every
+  - 15
+  - --cudnn_benchmark
+  - "True"
+  - --w_reg
+  - 1.5
+  - --w_seg
+  - 1.0
+  - --reg_include_bg
+  - "False"
+  - --reg_mask_source
+  - label
+  - --learn_task_weights
+  - "True"
+  - --ignore_index
+  - "True"
+  - --ignore_class_value
+  - 0

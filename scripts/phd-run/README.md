@@ -3,6 +3,11 @@
 Um motor (`02_train.py --arch ...`) para todas as redes, configurado por
 `experiments/<rede>/<nome>/experiment.yaml` sob `PHD_RUN_ROOT`.
 
+Esse YAML e o **rascunho** do proximo run. Ao iniciar `labels`/`train`/`predict`/`post`
+com `-run run-00N`, o runner grava uma copia imutavel em
+`experiments/<rede>/<nome>/run-00N/experiment.yaml` (+ `config:` no `run.yaml`).
+Editar o rascunho para o run-002 **nao apaga** o que o run-001 usou.
+
 Wrappers na **raiz do repo**: `run.ps1` / `run.cmd` (preferir `.cmd` no lab).
 
 ## PowerShell (lab / home)
@@ -140,11 +145,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\run.ps1 all -aoi 261002-ri
 ```text
 PHD_RUN_ROOT/
   datasets/<aoi>__lbl-v1/masks/
-  experiments/manet/latefusion-multitask/run-001/
-    models/
-    predictions/<aoi>/    # pred_class.tif, pred_dist.tif, pred_dist_bin_*.tif
-    run.yaml
-  reports/summary.md  summary.csv
+  experiments/manet/latefusion-multitask/
+    experiment.yaml          # rascunho (editavel) do proximo run
+    run-001/
+      experiment.yaml        # snapshot imutavel da config usada neste run
+      run.yaml               # registry (+ config: epochs/lr/patch/...)
+      models/
+      predictions/<aoi>/     # pred_class.tif, pred_dist.tif, pred_dist_bin_*.tif
+  reports/summary.md  summary.csv   # inclui epochs/lr/patch por run
 ```
 
 ## Docker

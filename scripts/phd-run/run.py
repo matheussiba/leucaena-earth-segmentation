@@ -17,7 +17,8 @@ Fases:
 
 Config:
   .env (por PC)            PHD_RUN_ROOT, TRAIN_PROFILE=home|lab, R_BIN (opcional)
-  experiment.yaml          todos os botoes do modelo (igual para qualquer rede)
+  experiment.yaml          rascunho editavel em experiments/<rede>/<nome>/
+  run-00N/experiment.yaml  snapshot imutavel da config usada naquele run
 
 Exemplos:
   python scripts/phd-run/run.py train   -aoi 261002-riodaspedras -experiment manet/latefusion-multitask -run run-001
@@ -30,6 +31,7 @@ import argparse
 import datetime as _dt
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -166,8 +168,12 @@ def host_run(script_abs: Path, args: list, dry=False):
 
 
 # --------------------------------------------------------------------------- cfg
+def experiment_yaml_path(lay: Layout, experiment: str) -> Path:
+    return lay.experiments / experiment / "experiment.yaml"
+
+
 def load_experiment(lay: Layout, experiment: str) -> dict:
-    exp_file = lay.experiments / experiment / "experiment.yaml"
+    exp_file = experiment_yaml_path(lay, experiment)
     if not exp_file.exists():
         sys.exit(f"[ABORT] experiment.yaml nao encontrado: {exp_file}\n"
                  f"        crie experiments/{experiment}/experiment.yaml "
@@ -175,6 +181,44 @@ def load_experiment(lay: Layout, experiment: str) -> dict:
     cfg = yaml.load(exp_file)
     cfg.setdefault("network", experiment.split("/")[0])
     return cfg
+
+
+def config_summary(cfg: dict) -> dict:
+    """Subset plano da config p/ run.yaml / report (nao substitui o snapshot)."""
+    keys = (
+        "network", "task", "latefusion", "fusion", "channels", "lidar_channels",
+        "num_classes", "report_class", "patch_size", "on_the_fly", "save_patches",
+        "epochs", "lr", "pretrained", "rgb_norm_method", "lidar_norm",
+        "class_weights", "reg_loss", "rgb_resolution", "chm_resolution",
+    )
+    out = {k: cfg[k] for k in keys if k in cfg}
+    labels = cfg.get("labels")
+    if isinstance(labels, dict):
+        out["labels_version"] = labels.get("version")
+        out["chm_min_m"] = labels.get("chm_min_m")
+        out["chm_filter_class"] = labels.get("chm_filter_class")
+    return out
+
+
+def snapshot_experiment(lay: Layout, experiment: str, rd: Path, *, dry: bool = False) -> Path:
+    """Copia o rascunho experiments/.../experiment.yaml -> run-00N/experiment.yaml.
+
+    Imutavel: se o snapshot ja existe, nao sobrescreve (preserva o que o run usou).
+    """
+    src = experiment_yaml_path(lay, experiment)
+    dst = rd / "experiment.yaml"
+    if dry:
+        print(f"[dry-run] snapshot {src} -> {dst}")
+        return dst
+    rd.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        print(f"[snapshot] ja existe (imutavel): {dst}")
+        return dst
+    if not src.is_file():
+        sys.exit(f"[ABORT] experiment.yaml nao encontrado p/ snapshot: {src}")
+    shutil.copy2(src, dst)
+    print(f"[snapshot] {src} -> {dst}")
+    return dst
 
 
 def dataset_id(aoi: str, cfg: dict, masked: bool = False) -> str:
@@ -597,17 +641,23 @@ def main():
     run = a.run
     if run and any(p in phases for p in ("labels", "train", "predict", "post")):
         rd = run_dir(lay, a.experiment, run)
+        snap = snapshot_experiment(lay, a.experiment, rd, dry=a.dry_run)
         data = load_run_yaml(rd)
         data.update({
             "run": run, "experiment": a.experiment, "network": cfg.get("network"),
             "profile": profile, "aoi_train": a.aoi, "dataset_id": res["dataset_id"],
+            "experiment_snapshot": str(snap).replace("\\", "/"),
         })
+        # congela config na 1a vez (nao sobrescreve se ja havia run.yaml)
+        if "config" not in data:
+            data["config"] = config_summary(cfg)
         if a.parent_run:
             data["parent_run"] = a.parent_run
         if a.init_from:
             data["init_from"] = a.init_from
         data.setdefault("timestamps", {}).setdefault("run_started", _now())
-        save_run_yaml(rd, data)
+        if not a.dry_run:
+            save_run_yaml(rd, data)
 
     for ph in phases:
         if ph == "lidar":

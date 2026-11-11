@@ -1,5 +1,9 @@
 # experiment.yaml - TODOS os botoes do modelo (iguais para QUALQUER rede).
-# Caminho: experiments/<rede>/<nome>/experiment.yaml   (ref: -experiment <rede>/<nome>)
+# Caminho (rascunho): experiments/<rede>/<nome>/experiment.yaml
+#   ref CLI: -experiment <rede>/<nome>
+# Snapshot imutavel por run (criado pelo runner na 1a fase com -run):
+#   experiments/<rede>/<nome>/run-00N/experiment.yaml
+# Editar este rascunho para o run-002 NAO altera o snapshot do run-001.
 # Trocar de rede = mudar `network:`. O que varia por PC fica no .env, nao aqui.
 
 network: manet                 # -> --arch : unet|unetplusplus|manet|linknet|BPATUNet|resunet

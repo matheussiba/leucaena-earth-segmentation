@@ -2,6 +2,7 @@
 # No PHD_RUN_ROOT: experiments/experiment-batch.yaml
 # O batch copia este arquivo para experiments/<rede>/latefusion-multitask-p256/
 # e so altera a linha network:.
+# Cada run-00N ganha snapshot imutavel em .../run-00N/experiment.yaml.
 #
 # Edite AQUI epochs/lr/samples/etc. uma vez — vale para todas as redes.
 

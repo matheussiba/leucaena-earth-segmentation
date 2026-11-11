@@ -518,7 +518,7 @@ def main():
     ap.add_argument("-profile", dest="profile", default=None, help="home|lab (sobrepoe .env)")
     ap.add_argument("-runtime", dest="runtime", choices=["docker", "host"], default="docker")
     ap.add_argument("-root", dest="root", default=None, help="sobrepoe PHD_RUN_ROOT")
-    ap.add_argument("-lidar-engine", dest="lidar_engine", choices=["python", "r"],
+    ap.add_argument("-lidar-engine", dest="lidar_engine", choices=["python", "r", "geotrees"],
                     default="python", help="engine do passo lidar (default: python)")
     ap.add_argument("--force-lidar", dest="force_lidar", action="store_true",
                     help="reprocessa LiDAR mesmo se rasters ja existirem")

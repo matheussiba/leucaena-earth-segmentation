@@ -13,7 +13,7 @@ param(
     [string]$run,
     [string]$profile,
     [ValidateSet("docker", "host")][string]$runtime = "docker",
-    [ValidateSet("python", "r")][string]$lidarEngine = "python",
+    [ValidateSet("python", "r", "geotrees")][string]$lidarEngine = "python",
     [string]$root,
     [string]$initFrom,
     [string]$parentRun,

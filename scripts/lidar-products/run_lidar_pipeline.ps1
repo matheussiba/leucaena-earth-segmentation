@@ -2,31 +2,36 @@
 # Orquestrador LiDAR: AOI (NOMENC) -> [CHM, INTENSITY] no pool
 # -----------------------------------------------------------------------------
 # Engines (-Engine):
-#   python  (default) prep-lidar-scene.py (PDAL: 1st return + p99) via Docker
-#   r       R/lidR (MDT TIN + CHM lspikefree) -> align Docker
+#   python   (default) prep-lidar-scene.py (PDAL: 1st return + p99) via Docker
+#   r        R/lidR (MDT TIN + CHM lspikefree) -> align Docker
+#   geotrees protocolo GeoTrees/GCA (Fischer 2024; testes IGC) -> align Docker
+#            DSM 1º retorno + lspikefree, CHM=DSM-DTM (make_lidar_products_geotrees.R)
 #
 # Exemplo:
 #   .\run_lidar_pipeline.ps1 -aoi 261002-riodaspedras
 #   .\run_lidar_pipeline.ps1 -aoi 261002-riodaspedras -Engine r
+#   .\run_lidar_pipeline.ps1 -aoi 261002-riodaspedras -Engine geotrees -Force
 #   .\run_lidar_pipeline.ps1 -aoi 261002-riodaspedras -Engine r -Mode products
 #
-# .env: PHD_RUN_ROOT, R_BIN (so para -Engine r)
+# .env: PHD_RUN_ROOT, R_BIN (Engine r|geotrees), LASTOOLS_PATH (opcional, catalog)
 # =============================================================================
 param(
     [Parameter(Mandatory = $true)]
     [string]$aoi,
-    [ValidateSet("r", "python")]
+    [ValidateSet("r", "python", "geotrees")]
     [string]$Engine = "python",
     [ValidateSet("all", "products", "align")]
     [string]$Mode = "all",
     [switch]$Force,
     [switch]$NoOptical,
     [switch]$NoIntensity,
-    [double]$Res = -1,       # -1 = default por engine (r:0.5, python:1.0)
+    [double]$Res = -1,       # -1 = default por engine (python/geotrees:1.0, r:0.5)
     [double]$ChmMax = 120,
-    [double]$MaxEdge = 50,   # so Engine=r (TIN)
-    [int]$Workers = 4,       # so Engine=r
-    [int]$Threads = 12       # so Engine=r
+    [double]$MaxEdge = 50,   # TIN (r|geotrees)
+    [int]$Workers = 4,       # r|geotrees
+    [int]$Threads = 12,      # r|geotrees
+    [ValidateSet("perfile", "catalog")]
+    [string]$GeotreesProtocol = "perfile"
 )
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
@@ -58,7 +63,11 @@ if ($vars.ContainsKey("R_BIN") -and -not [string]::IsNullOrWhiteSpace($vars["R_B
 }
 
 if ($Res -lt 0) {
-    $Res = if ($Engine -eq "python") { 1.0 } else { 0.5 }
+    $Res = if ($Engine -eq "r") { 0.5 } else { 1.0 }  # python + geotrees: 1 m
+}
+if ($Engine -eq "geotrees" -and $ChmMax -eq 120) {
+    # GeoTrees paper / ALS_processing.R usam height_lim=125 por default
+    $ChmMax = 125
 }
 
 # ---- resolve AOI -> optical tiles + laz stems (NOMENC) ----------------------
@@ -91,9 +100,12 @@ Write-Host "AOI: $aoi | via $($info.resolved_via) | Engine=$Engine"
 Write-Host "  optical ($($optical.Count)): $($optical -join ', ')"
 Write-Host "  laz     ($($lazStems.Count)): $($lazStems -join ', ')"
 Write-Host "Mode: $Mode | Force=$Force | Res=$Res | ChmMax=$ChmMax"
-if ($Engine -eq "r") {
+if ($Engine -eq "r" -or $Engine -eq "geotrees") {
     Write-Host "Workers=$Workers | Threads=$Threads | MaxEdge=$MaxEdge m (TIN)"
     Write-Host "R: $Rbin"
+    if ($Engine -eq "geotrees") {
+        Write-Host "GeoTrees protocol=$GeotreesProtocol | ChmMax=$ChmMax (height_lim)"
+    }
 }
 
 New-Item -ItemType Directory -Force -Path $PROD_HOST, $RAS_HOST | Out-Null
@@ -161,7 +173,7 @@ if ($Engine -eq "python") {
 }
 
 # =============================================================================
-# Engine = r: make_lidar_products.R -> align_lidar_to_optical.py
+# Engine = r | geotrees: R products -> align_lidar_to_optical.py
 # =============================================================================
 if ($Mode -eq "products" -or $Mode -eq "all") {
     $have = Test-Aoi-R-Products
@@ -171,24 +183,44 @@ if ($Mode -eq "products" -or $Mode -eq "all") {
         if (-not (Test-Path $Rbin) -and -not (Get-Command $Rbin -ErrorAction SilentlyContinue)) {
             throw "Rscript nao encontrado ('$Rbin'). Ajuste R_BIN no .env."
         }
-        $rargs = @(".\make_lidar_products.R",
-                   "--laz-dir", $LAZ_HOST,
-                   "--out-dir", $PROD_HOST,
-                   "--names", $lazNamesCsv,
-                   "--res", ("{0}" -f $Res).Replace(",", "."),
-                   "--max-edge", ("{0}" -f $MaxEdge).Replace(",", "."),
-                   "--chm-max", $ChmMax,
-                   "--workers", $Workers,
-                   "--threads", $Threads)
-        if ($Force) { $rargs += "--force" }
-        Write-Host "`n[PASSO 1 - R] $Rbin $($rargs -join ' ')"
-        & $Rbin @rargs
-        if ($LASTEXITCODE -ne 0) { throw "make_lidar_products.R falhou (exit $LASTEXITCODE)" }
+        if ($Engine -eq "geotrees") {
+            $rargs = @(".\make_lidar_products_geotrees.R",
+                       "--laz-dir", $LAZ_HOST,
+                       "--out-dir", $PROD_HOST,
+                       "--names", $lazNamesCsv,
+                       "--res", ("{0}" -f $Res).Replace(",", "."),
+                       "--max-edge", ("{0}" -f $MaxEdge).Replace(",", "."),
+                       "--chm-max", $ChmMax,
+                       "--workers", $Workers,
+                       "--threads", $Threads,
+                       "--protocol", $GeotreesProtocol)
+            if ($Force) { $rargs += "--force" }
+            if ($vars.ContainsKey("LASTOOLS_PATH") -and $vars["LASTOOLS_PATH"]) {
+                $rargs += @("--path-lastools", $vars["LASTOOLS_PATH"])
+            }
+            Write-Host "`n[PASSO 1 - GeoTrees] $Rbin $($rargs -join ' ')"
+            & $Rbin @rargs
+            if ($LASTEXITCODE -ne 0) { throw "make_lidar_products_geotrees.R falhou (exit $LASTEXITCODE)" }
+        } else {
+            $rargs = @(".\make_lidar_products.R",
+                       "--laz-dir", $LAZ_HOST,
+                       "--out-dir", $PROD_HOST,
+                       "--names", $lazNamesCsv,
+                       "--res", ("{0}" -f $Res).Replace(",", "."),
+                       "--max-edge", ("{0}" -f $MaxEdge).Replace(",", "."),
+                       "--chm-max", $ChmMax,
+                       "--workers", $Workers,
+                       "--threads", $Threads)
+            if ($Force) { $rargs += "--force" }
+            Write-Host "`n[PASSO 1 - R] $Rbin $($rargs -join ' ')"
+            & $Rbin @rargs
+            if ($LASTEXITCODE -ne 0) { throw "make_lidar_products.R falhou (exit $LASTEXITCODE)" }
+        }
     }
 }
 
 if ($Mode -eq "products") {
-    Write-Host "`nSo passo R concluido. Produtos em: $PROD_HOST"
+    Write-Host "`nSo passo R/GeoTrees concluido. Produtos em: $PROD_HOST"
     return
 }
 
@@ -230,4 +262,4 @@ foreach ($tile in $optical) {
     Write-Host ("  -> {0}" -f $outHost)
 }
 
-Write-Host ("`nLiDAR do AOI '{0}' pronto (engine=r) em: {1}" -f $aoi, $RAS_HOST)
+Write-Host ("`nLiDAR do AOI '{0}' pronto (engine={1}) em: {2}" -f $aoi, $Engine, $RAS_HOST)

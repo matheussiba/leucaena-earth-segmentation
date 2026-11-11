@@ -6,7 +6,8 @@ O usuário escolhe o **engine**:
 | `-Engine` | O que roda | Quando usar |
 |---|---|---|
 | **`python`** (default) | `prep-lidar-scene.py` (PDAL: 1º retorno + p99 DSM − DTM + INT) via Docker | padrão do fluxo PhD / `run all` |
-| **`r`** | `make_lidar_products.R` (lidR TIN+lspikefree) → `align_lidar_to_optical.py` | CHM “de laboratório” (TIN com `max_edge`) |
+| **`r`** | `make_lidar_products.R` (lidR: normaliza + lspikefree) → align | CHM “de laboratório” (TIN `max_edge`) |
+| **`geotrees`** | `make_lidar_products_geotrees.R` (protocolo GeoTrees/GCA) → align | CHM testado no IGC (Fischer et al. 2024): DSM 1º retorno + lspikefree, CHM=DSM−DTM |
 
 Os dois escrevem o **mesmo** destino:
 `PHD_RUN_ROOT/tiles/lidar/rasters/<tile>.tif`.
@@ -19,7 +20,9 @@ O AOI (`aois/<aoi>.gpkg`) define os tiles via `NOMENC_2K / NOMENC_5K / NOMENC_10
 |---|---|---|
 | `resolve_aoi_lidar.py` | host | AOI.gpkg → tiles ópticos + stems LAZ (NOMENC) |
 | `make_lidar_products.R` | host (R + lidR) | Engine **r**: MDT + CHM (MDS opcional `--mds`) |
-| `align_lidar_to_optical.py` | Docker | Engine **r**: mosaica CHM R + INT → grade do óptico |
+| `make_lidar_products_geotrees.R` | host (R + lidR) | Engine **geotrees**: protocolo GCA / GeoTrees |
+| `geotrees/` | — | Helper + script de referência (Fischer et al. 2024) |
+| `align_lidar_to_optical.py` | Docker | Engines **r** / **geotrees**: mosaica CHM + INT → grade do óptico |
 | `../../prep-lidar-scene.py` | Docker | Engine **python** (default): PDAL 1º retorno + p99 / DTM min + warp |
 | `run_lidar_pipeline.ps1` | host | Orquestra resolve + engine escolhido |
 | `docker-compose.yml` | — | Monta `PHD_RUN_ROOT/tiles` em `/data/tiles` |
@@ -59,6 +62,10 @@ cd <repo>   # ex.: C:\Users\CMQ\Documents\MSB\0-GITHUB\leucaena-earth-segmentati
 .\run_lidar.cmd -aoi 261002-riodaspedras -Engine python
 .\run_lidar.cmd -aoi 261002-riodaspedras -Engine python -Force
 # res nativa PDAL default = 1.0 m (override: -Res 1)
+
+# --- Engine geotrees (GeoTrees / GCA, testes IGC) ---
+.\run_lidar.cmd -aoi 261002-riodaspedras -Engine geotrees -Force
+.\run_lidar.cmd -aoi 261002-riodaspedras -Engine geotrees -GeotreesProtocol catalog  # helper completo
 ```
 
 ### Qual engine escolher?

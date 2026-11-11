@@ -111,13 +111,17 @@ foreach ($arch in $archList) {
     }
 }
 
-$runPs1 = Join-Path $repoRoot "run.ps1"
-function Invoke-Phd([string[]]$ArgsList) {
+$runCmd = Join-Path $repoRoot "run.cmd"
+function Invoke-Phd {
+    # Nao usar & run.ps1 @array: splat de array no PowerShell e POSICIONAL
+    # e quebra (-aoi vira arg posicional). run.cmd %* preserva nomes.
+    param([Parameter(Mandatory = $true)][string[]]$ArgsList)
     Write-Host "`n>> .\run.cmd $($ArgsList -join ' ')"
     if ($DryRun) { return }
-    & $runPs1 @ArgsList
-    if ($LASTEXITCODE -ne 0) {
-        throw "Falha (rc=$LASTEXITCODE): run.cmd $($ArgsList -join ' ')"
+    $p = Start-Process -FilePath $runCmd -ArgumentList $ArgsList `
+        -WorkingDirectory $repoRoot -Wait -PassThru -NoNewWindow
+    if ($null -eq $p.ExitCode -or $p.ExitCode -ne 0) {
+        throw "Falha (rc=$($p.ExitCode)): run.cmd $($ArgsList -join ' ')"
     }
 }
 
@@ -134,14 +138,14 @@ Write-Host "`n=== PREP (lidar / resolve / labels) via $firstExp ==="
 if (-not $SkipLidar) {
     $la = @("lidar", "-aoi", $aoi, "-lidarEngine", $lidarEngine)
     if ($ForceLidar) { $la += "-forceLidar" }
-    Invoke-Phd $la
+    Invoke-Phd -ArgsList $la
 }
 
 $ra = @("resolve", "-experiment", $firstExp) + $common
 if ($ForceResolve) { $ra += "-forceResolve" }
-Invoke-Phd $ra
+Invoke-Phd -ArgsList $ra
 
-Invoke-Phd (@("labels", "-experiment", $firstExp) + $common)
+Invoke-Phd -ArgsList (@("labels", "-experiment", $firstExp) + $common)
 
 # ---- 2) train (+ predict/post) por rede -------------------------------------
 $logDir = Join-Path $expRoot "_batch_logs"
@@ -154,12 +158,12 @@ foreach ($arch in $archList) {
     $exp = "$arch/$expName"
     Write-Host "`n=== TRAIN $exp  run=$run ==="
     try {
-        Invoke-Phd (@("train", "-experiment", $exp) + $common)
+        Invoke-Phd -ArgsList (@("train", "-experiment", $exp) + $common)
         if (-not $SkipPredict) {
-            Invoke-Phd (@("predict", "-experiment", $exp) + $common)
+            Invoke-Phd -ArgsList (@("predict", "-experiment", $exp) + $common)
         }
         if (-not $SkipPost) {
-            Invoke-Phd (@("post", "-experiment", $exp) + $common)
+            Invoke-Phd -ArgsList (@("post", "-experiment", $exp) + $common)
         }
         "OK  $exp" | Add-Content $summary -Encoding UTF8
         Write-Host "[OK] $exp"

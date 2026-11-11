@@ -61,7 +61,7 @@ def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
                               classes_dist_map=None, dist_map_as_cluster=False,
                               cluster_edge_m=10.0,
                               chm_path=None, chm_band=1, intensity_band=2, chm_min_m=4.0,
-                              chm_filter_class=1):
+                              chm_filter_class=1, remap_dense=False):
     """
     Converte um shapefile em raster de treino e teste baseados em uma imagem de referência.
     Gera imagens rotuladas, e opcionalmente mapas de distância suavizados (Gaussiano)
@@ -118,10 +118,22 @@ def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
         print(f"   Reprojetando shapefile para {crs}...")
         gdf = gdf.to_crs(crs)
     
-    print("   Calculando remapeamento de classes...")
-    unique_dns = sorted(gdf['DN'].dropna().unique())
-    mapping = {int(val): i + 1 for i, val in enumerate(unique_dns)}
-    
+    print("   Calculando mapeamento de classes...")
+    if 'DN' not in gdf.columns:
+        raise SystemExit("[ABORT] annotations sem coluna 'DN' (classe).")
+    unique_dns = sorted(int(v) for v in gdf['DN'].dropna().unique())
+    # PADRÃO = identidade (DN 3 continua 3 no raster).
+    # Remapeamento denso (1,3,4,5 → 1,2,3,4) QUEBRA finetune entre AOIs:
+    # a rede do run-001 aprendeu "2=espécie X", e a AOI nova sem X faria
+    # DN 3 virar raster-2 → confunde as classes.
+    if remap_dense:
+        mapping = {val: i + 1 for i, val in enumerate(unique_dns)}
+        print(f"   ⚠️  remap_dense=True: {unique_dns} → {[mapping[v] for v in unique_dns]}")
+    else:
+        mapping = {val: val for val in unique_dns}
+        print(f"   identidade DN→raster: {unique_dns} (classes ausentes nesta AOI "
+              f"ficam sem pixels; ok p/ finetune)")
+
     # Classes que entram no mapa de distância (None = todas)
     if classes_dist_map is not None:
         classes_dist_map = sorted({int(c) for c in classes_dist_map})
@@ -136,6 +148,7 @@ def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
     out_txt_path = os.path.join(out_base_dir, "ITCs_classes_report.txt")
     os.makedirs(out_base_dir, exist_ok=True)
     with open(out_txt_path, 'w', encoding='utf-8') as f:
+        f.write(f"Mode: {'dense_remap' if remap_dense else 'identity'}\n")
         f.write("Original_DN -> Mapped_Class\n")
         for orig, mapped in mapping.items():
             f.write(f"{orig} -> {mapped}\n")
@@ -149,6 +162,8 @@ def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
                     + "\n")
 
     print(f"👉 Dicionário de conversão salvo em: {out_txt_path}")
+    for orig, mapped in mapping.items():
+        print(f"   DN {orig} → classe raster {mapped}")
 
     # Aplica o mapeamento de classes
     gdf['DN_mapped'] = gdf['DN'].map(mapping)
@@ -406,13 +421,17 @@ if __name__ == "__main__":
     p.add_argument('--calc_distance', type=_as_bool, default=True,
                    help='Gera os mapas de distância.')
     p.add_argument('--seed', type=int, default=27)
-    # DN original 1=leucaena → após remapeamento ordenado vira classe 1 no raster.
+    # DN 1=leucaena permanece 1 no raster (mapeamento identidade; ver --remap_dense).
     # Só a leucaena entra no mapa de distância (análogo ao maciço de açaí).
     p.add_argument('--classes_dist_map', nargs='+', default=['1'],
                    help='Classes (valor no raster de rótulos) cujos polígonos entram no '
                         'mapa de distância; as demais ficam com distância 0. Ex.: '
                         '--classes_dist_map 1 2  ou  --classes_dist_map [1,2]. '
                         'Padrão neste experimento: 1 (leucaena).')
+    p.add_argument('--remap_dense', type=_as_bool, default=False,
+                   help='Se True, renumera DNs presentes nesta AOI para 1..K contíguos '
+                        '(legado). PERIGOSO em finetune: AOI sem classe 2 faz DN 3 virar '
+                        'raster-2. Default False = identidade (DN 3 continua 3).')
     p.add_argument('--dist_map_as_cluster', type=_as_bool, default=True,
                    help='False: cada polígono é UMA copa → cone normalizado por polígono '
                         '(pico 1 no centro, 0 na borda). True (padrão): cada polígono é um '
@@ -461,4 +480,5 @@ if __name__ == "__main__":
         intensity_band=a.intensity_band,
         chm_min_m=a.chm_min_m,
         chm_filter_class=a.chm_filter_class,
+        remap_dense=a.remap_dense,
     )

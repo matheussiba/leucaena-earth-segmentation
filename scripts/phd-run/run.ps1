@@ -6,7 +6,7 @@
 #   .\run.ps1 report
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("lidar", "resolve", "labels", "train", "predict", "post", "report", "all")]
+    [ValidateSet("lidar", "resolve", "labels", "train", "predict", "post", "eval", "report", "all")]
     [string]$phase,
     [string]$aoi,
     [string]$experiment,

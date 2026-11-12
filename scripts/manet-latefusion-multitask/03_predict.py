@@ -1151,6 +1151,7 @@ def predict_one_overlap(
     task:       str = 'multitask',
     chm_reader=None,
     mask=None,
+    acc_dtype=np.float32,
 ) -> tuple:
     """
     Roda uma passagem completa com um dado overlap.
@@ -1163,14 +1164,16 @@ def predict_one_overlap(
       • regression     → acumula apenas distância    (acc_seg  fica None)
 
     Retorna (acc_seg, acc_dist) — qualquer um pode ser None se não se aplica.
+    Cenas grandes: passe acc_dtype=np.float16 para cortar RAM ~pela metade.
     """
     rows, cols = reader.rows, reader.cols
     do_seg = task in ('multitask', 'classification')
     do_reg = task in ('multitask', 'regression')
 
-    acc_seg  = np.zeros((rows, cols, n_classes), dtype=np.float32) if do_seg else None
-    acc_dist = np.zeros((rows, cols),            dtype=np.float32) if do_reg else None
-    count    = np.zeros((rows, cols),            dtype=np.float32)
+    acc_seg  = np.zeros((rows, cols, n_classes), dtype=acc_dtype) if do_seg else None
+    acc_dist = np.zeros((rows, cols),            dtype=acc_dtype) if do_reg else None
+    # uint16 basta p/ contagem de overlaps tipicos; economiza ~2x vs float32
+    count    = np.zeros((rows, cols),            dtype=np.uint16)
 
     dataset = SlidingWindowDataset(reader, patch_size, overlap,
                                    chm_reader=chm_reader, mask=mask)
@@ -1231,18 +1234,26 @@ def predict_one_overlap(
             for b in range(n_in_batch):
                 r = int(r_batch[b]); c = int(c_batch[b])
                 if do_seg:
-                    acc_seg[r:r+p, c:c+p, :] += prob_np[b].transpose(1, 2, 0)
+                    acc_seg[r:r+p, c:c+p, :] += prob_np[b].transpose(1, 2, 0).astype(acc_dtype, copy=False)
                 if do_reg:
-                    acc_dist[r:r+p, c:c+p]   += dist_np[b]
-                count[r:r+p, c:c+p] += 1.0
+                    acc_dist[r:r+p, c:c+p]   += dist_np[b].astype(acc_dtype, copy=False)
+                count[r:r+p, c:c+p] += np.uint16(1)
 
-    # divide pelo contador (evita divisão por zero nas bordas)
+    # divide pelo contador (evita divisão por zero nas bordas).
+    # Em float16: normaliza banda a banda em float32 temporario (nao dobra a cena inteira).
     mask = count > 0
     if do_seg:
         for k in range(n_classes):
-            acc_seg[mask, k] /= count[mask]
+            band = acc_seg[:, :, k].astype(np.float32)
+            band[mask] /= count[mask]
+            acc_seg[:, :, k] = band.astype(acc_dtype, copy=False)
+            del band
     if do_reg:
-        acc_dist[mask] /= count[mask]
+        dist = acc_dist.astype(np.float32)
+        dist[mask] /= count[mask]
+        acc_dist = dist.astype(acc_dtype, copy=False)
+        del dist
+    del count
 
     return acc_seg, acc_dist
 
@@ -1699,17 +1710,45 @@ def predict(args):
     model.eval()
 
     # ── 7c. Acumuladores multi-overlap (conforme a task) ──────
+    import gc  # noqa: PLC0415
     rows, cols = reader.rows, reader.cols
     do_seg = args.task in ('multitask', 'classification')
     do_reg = args.task in ('multitask', 'regression')
-    final_seg  = np.zeros((rows, cols, n_classes), dtype=np.float32) if do_seg else None
-    final_dist = np.zeros((rows, cols),            dtype=np.float32) if do_reg else None
+    n_px = int(rows) * int(cols)
+    # ~1e8 px (~10k²) → float16 nos acumuladores; AOIs tipo piracicaba (~1e9) precisam
+    huge = n_px >= 80_000_000
+    acc_dtype = np.float16 if huge else np.float32
+    if huge and args.batch_size > 2:
+        print(f"  [mem] cena grande ({rows}x{cols}={n_px:,} px) → "
+              f"batch_size {args.batch_size}→2, acc=float16")
+        args.batch_size = 2
+    elif huge:
+        print(f"  [mem] cena grande ({rows}x{cols}={n_px:,} px) → acc=float16")
 
     overlaps = sorted(set(args.overlaps))   # ex: [0.3, 0.5, 0.7]
     n_passes = len(overlaps)
+    os.makedirs(args.out_dir, exist_ok=True)
+    ckpt_dir = os.path.join(args.out_dir, '_overlap_ckpt')
+    os.makedirs(ckpt_dir, exist_ok=True)
 
+    def _ov_tag(ov: float) -> str:
+        return f"{ov:.2f}"
+
+    def _ov_paths(ov: float):
+        tag = _ov_tag(ov)
+        return (
+            os.path.join(ckpt_dir, f'ov_{tag}.done'),
+            os.path.join(ckpt_dir, f'ov_{tag}_seg.npy'),
+            os.path.join(ckpt_dir, f'ov_{tag}_dist.npy'),
+        )
+
+    resume = bool(getattr(args, 'resume', True))
     for ov in overlaps:
+        done_p, seg_p, dist_p = _ov_paths(ov)
         desc = f"overlap={ov:.1f}"
+        if resume and os.path.isfile(done_p):
+            print(f"\n[resume] {desc} já checkpointado → pulando")
+            continue
         print(f"\nPassagem com {desc}  "
               f"(stride={max(1, int(round(args.patch_size * (1 - ov))))} px)")
 
@@ -1725,15 +1764,38 @@ def predict(args):
             task       = args.task,
             chm_reader = chm_reader,
             mask       = mangrove_mask,
+            acc_dtype  = acc_dtype,
         )
-        # acumula: cada overlap contribui igualmente para a média final
+        # checkpoint em disco (float16) — permite retomar se Docker/OOM matar o container
+        if do_seg and seg_ov is not None:
+            np.save(seg_p, seg_ov.astype(np.float16, copy=False))
+            del seg_ov
+        if do_reg and dist_ov is not None:
+            np.save(dist_p, dist_ov.astype(np.float16, copy=False))
+            del dist_ov
+        with open(done_p, 'w', encoding='utf-8') as f:
+            f.write('ok\n')
+        gc.collect()
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+        print(f"  [ckpt] {desc} salvo em {ckpt_dir}")
+
+    # remonta média final a partir dos checkpoints (1 overlap por vez → menos pico de RAM)
+    final_seg  = np.zeros((rows, cols, n_classes), dtype=np.float32) if do_seg else None
+    final_dist = np.zeros((rows, cols),            dtype=np.float32) if do_reg else None
+    for ov in overlaps:
+        _, seg_p, dist_p = _ov_paths(ov)
         if do_seg:
-            final_seg  += seg_ov  / n_passes
+            if not os.path.isfile(seg_p):
+                raise FileNotFoundError(f"checkpoint de overlap ausente: {seg_p}")
+            final_seg += np.load(seg_p).astype(np.float32) / n_passes
         if do_reg:
-            final_dist += dist_ov / n_passes
+            if not os.path.isfile(dist_p):
+                raise FileNotFoundError(f"checkpoint de overlap ausente: {dist_p}")
+            final_dist += np.load(dist_p).astype(np.float32) / n_passes
+        gc.collect()
 
     # ── 7d/7e. Decisão final + salvamento (conforme a task) ───
-    os.makedirs(args.out_dir, exist_ok=True)
     meta = reader.meta   # crs + transform + driver preservados via rasterio
 
     # ── Resolução do CRS de saída ─────────────────────────────
@@ -1837,6 +1899,15 @@ def predict(args):
         print(f"  Dist. média predita     : {final_dist.mean():.3f}")
     print(f"  Resultados em           : {args.out_dir}")
 
+    # limpa checkpoints de overlap (rasters finais já gravados)
+    try:
+        import shutil  # noqa: PLC0415
+        if os.path.isdir(ckpt_dir):
+            shutil.rmtree(ckpt_dir)
+            print(f"  [ckpt] removido {ckpt_dir}")
+    except OSError as exc:
+        print(f"  [warn] nao removeu {ckpt_dir}: {exc}")
+
 
 # ═════════════════════════════════════════════════════════════
 # region Argumentos
@@ -1880,6 +1951,9 @@ def get_args():
                         'final é a média. Mais/maiores overlaps suavizam costuras.')
     p.add_argument('--batch_size', type=int, default=1500,
                    help='Patches por batch na GPU (ajuste à sua memória).')
+    p.add_argument('--resume', type=_as_bool, default=True,
+                   help='Se True (default), reusa _overlap_ckpt/ de runs interrompidos '
+                        '(pula overlaps já salvos). False = refaz tudo.')
 
     # ── Máscara de mangue (foca a predição na classe-alvo) ────
     p.add_argument('--use_mangrove_mask', default=False,

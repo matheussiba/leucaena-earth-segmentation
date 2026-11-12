@@ -548,13 +548,15 @@ def phase_predict(lay, cfg, aoi, res, run, runtime, dry=False):
     out.mkdir(parents=True, exist_ok=True)
     pr = cfg.get("predict", {}) if isinstance(cfg.get("predict"), dict) else {}
     overlaps = pr.get("overlaps", [0.3, 0.5, 0.7])
+    # default 4: AOIs grandes (piracicaba) com batch 8+ derrubam o container (EOF/OOM)
     args = [
         "--image_path", _p(lay, runtime, res["rgbnir_vrt"]),
         "--chm_path", _p(lay, runtime, res["lidar_vrt"]),
         "--checkpoint", _p(lay, runtime, ckpt),
         "--out_dir", _p(lay, runtime, out),
         "--output_crs", str(cfg.get("output_crs", "EPSG:31983")),
-        "--batch_size", str(pr.get("batch_size", 8)),
+        "--batch_size", str(pr.get("batch_size", 4)),
+        "--resume", str(pr.get("resume", True)),
         "--overlaps"] + [str(o) for o in overlaps]
     script_rel = "scripts/manet-latefusion-multitask/03_predict.py"
     if runtime == "docker":

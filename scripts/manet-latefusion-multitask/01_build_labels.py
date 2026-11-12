@@ -1,4 +1,4 @@
-﻿import os
+import os
 for _v in ('PROJ_LIB', 'PROJ_DATA', 'GDAL_DATA'):
     os.environ.pop(_v, None)
 
@@ -61,7 +61,8 @@ def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
                               classes_dist_map=None, dist_map_as_cluster=False,
                               cluster_edge_m=10.0,
                               chm_path=None, chm_band=1, intensity_band=2, chm_min_m=4.0,
-                              chm_filter_class=1, remap_dense=False):
+                              chm_filter_class=1, remap_dense=False,
+                              num_classes: int | None = None):
     """
     Converte um shapefile em raster de treino e teste baseados em uma imagem de referência.
     Gera imagens rotuladas, e opcionalmente mapas de distância suavizados (Gaussiano)
@@ -122,6 +123,19 @@ def process_itc_rasterization(img_path, shp_path, out_base_dir, train_ratio=0.8,
     if 'DN' not in gdf.columns:
         raise SystemExit("[ABORT] annotations sem coluna 'DN' (classe).")
     unique_dns = sorted(int(v) for v in gdf['DN'].dropna().unique())
+    # Fail-fast: DN fora de [1, num_classes) vira nodata no treino (ex. DN 9
+    # com num_classes=6). Abortar AQUI evita gastar tempo em CHM/distancia.
+    if num_classes is not None:
+        ncls = int(num_classes)
+        bad = [d for d in unique_dns if d < 1 or d >= ncls]
+        if bad:
+            raise SystemExit(
+                f"[ABORT] annotations tem DN {bad} incompatível com "
+                f"num_classes={ncls} (válidos: 1..{ncls - 1}).\n"
+                f"        DNs nesta AOI: {unique_dns}\n"
+                f"        Corrija o GPKG (ex. 9→5) e rode com -forceResolve "
+                f"(ou atualize o arquivo para o resolve detectar e refazer)."
+            )
     # PADRÃO = identidade (DN 3 continua 3 no raster).
     # Remapeamento denso (1,3,4,5 → 1,2,3,4) QUEBRA finetune entre AOIs:
     # a rede do run-001 aprendeu "2=espécie X", e a AOI nova sem X faria
@@ -459,6 +473,9 @@ if __name__ == "__main__":
                         'vira 0 (leucaena tipicamente CHM>4).')
     p.add_argument('--chm_filter_class', type=int, default=1,
                    help='Classe no raster de rotulos a filtrar pelo CHM (1=leucaena).')
+    p.add_argument('--num_classes', type=int, default=None,
+                   help='Se definido, ABORTA no inicio se algum DN estiver fora de '
+                        '[1, num_classes). Evita processar CHM/distancia com label invalido.')
     a = p.parse_args()
 
     # Execute a função com suporte ao filtro Gaussiano e Normalização per-ITC
@@ -481,4 +498,5 @@ if __name__ == "__main__":
         chm_min_m=a.chm_min_m,
         chm_filter_class=a.chm_filter_class,
         remap_dense=a.remap_dense,
+        num_classes=a.num_classes,
     )

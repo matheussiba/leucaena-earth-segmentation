@@ -19,10 +19,10 @@ param(
     [string]$parentRun,
     [string]$maskGpkg,
     [switch]$mask,
-    [switch]$forceLidar,
-    [switch]$skipLidar,
-    [switch]$forceResolve,
-    [switch]$dryRun
+    [Alias("force-lidar")][switch]$forceLidar,
+    [Alias("skip-lidar")][switch]$skipLidar,
+    [Alias("force-resolve")][switch]$forceResolve,
+    [Alias("dry-run")][switch]$dryRun
 )
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path

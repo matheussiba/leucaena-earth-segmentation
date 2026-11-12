@@ -183,6 +183,32 @@ def load_experiment(lay: Layout, experiment: str) -> dict:
     return cfg
 
 
+def _preflight_annotation_dns(lay: Layout, cfg: dict) -> None:
+    """ABORT imediato se o GPKG global tem DN fora de [1, num_classes)."""
+    ann = annotations_path(lay, cfg)
+    if ann is None or not ann.is_file():
+        return
+    ncls = int(cfg.get("num_classes", 6) or 6)
+    try:
+        import geopandas as gpd  # noqa: PLC0415
+        gdf = gpd.read_file(ann)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] preflight annotations: nao leu {ann} ({exc})")
+        return
+    if "DN" not in gdf.columns:
+        sys.exit(f"[ABORT] annotations sem coluna DN: {ann}")
+    dns = sorted({int(v) for v in gdf["DN"].dropna().unique()})
+    bad = [d for d in dns if d < 1 or d >= ncls]
+    if bad:
+        sys.exit(
+            f"[ABORT] {ann.name} tem DN {bad} fora de [1, {ncls - 1}] "
+            f"(num_classes={ncls}).\n"
+            f"        DNs no arquivo: {dns}\n"
+            f"        Corrija o GPKG (ex. 9→5) ANTES de lidar/labels/train."
+        )
+    print(f"[preflight] annotations OK: DN={dns} (num_classes={ncls})")
+
+
 def config_summary(cfg: dict) -> dict:
     """Subset plano da config p/ run.yaml / report (nao substitui o snapshot)."""
     keys = (
@@ -421,6 +447,7 @@ def phase_labels(lay, cfg, aoi, res, runtime, dry=False):
         "--chm_min_m", str(lab.get("chm_min_m", 4.0)),
         "--chm_filter_class", str(lab.get("chm_filter_class", 1)),
         "--train_ratio", str(lab.get("train_ratio", 0.8)),
+        "--num_classes", str(int(cfg.get("num_classes", 6))),
     ]
     if res.get("lidar_vrt") and Path(res["lidar_vrt"]).is_file():
         args += ["--chm_path", _p(lay, runtime, res["lidar_vrt"])]
@@ -621,6 +648,11 @@ def main():
     cfg["_force_resolve"] = bool(a.force_resolve)
     if not a.aoi:
         sys.exit("[ABORT] -aoi <nome> e obrigatorio.")
+
+    # Fail-fast ANTES de lidar/labels: DN do GPKG global vs num_classes.
+    # Evita 10+ min de Docker/CHM para descobrir DN 9 com num_classes=6.
+    if a.phase in ("labels", "train", "all") and not a.dry_run:
+        _preflight_annotation_dns(lay, cfg)
 
     needs_lidar = bool(cfg.get("latefusion", False)) or int(cfg.get("lidar_channels", 0) or 0) > 0
     if a.phase == "all":

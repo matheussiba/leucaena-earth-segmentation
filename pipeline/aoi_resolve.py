@@ -473,7 +473,18 @@ def main() -> None:
         if a.require_lidar:
             lid_ok = lid_tif.is_file() if mask_gpkg else (lid_tif.is_file() or lid_vrt_p.is_file())
         ann_ok = (not a.annotations) or ann_p.is_file()
-        if rgb_ok and lid_ok and ann_ok:
+        # Se o GPKG global foi editado (ex.: DN 9→5), o clip antigo fica stale:
+        # nao pular — reconstroi sem exigir --force manual.
+        ann_stale = False
+        if a.annotations and ann_p.is_file():
+            src_ann = Path(a.annotations)
+            if src_ann.is_file() and src_ann.stat().st_mtime > ann_p.stat().st_mtime + 1.0:
+                ann_stale = True
+                print(
+                    f"[resolve] annotations fonte mais nova que o clip "
+                    f"({src_ann.name} > {ann_p.name}) → refazendo resolve"
+                )
+        if rgb_ok and lid_ok and ann_ok and not ann_stale:
             print(f"[skip] resolve ja pronto em {out_dir} (use --force p/ refazer)")
             print(f"resolve.json -> {meta_path}")
             return

@@ -615,8 +615,8 @@ def build_fusion_backbone(arch: str, in_channels: int, out_ch: int,
                          decoder_channels=(512, 256, 128, 64),
                          decoder_use_batchnorm=True, decoder_pab_channels=64)
     elif arch == "linknet":
-        return smp.Linknet(**SMP_COMMON, classes=out_ch,
-                           decoder_channels=(256, 128, 64, 32))
+        # Linknet do SMP nao aceita decoder_channels (decoder segue o encoder).
+        return smp.Linknet(**SMP_COMMON, classes=out_ch)
     elif arch == "BPATUNet":
         return BPATUNet(in_channels=in_channels, n_classes=out_ch,
                         base_channels=64, depth=depth)
@@ -697,10 +697,8 @@ def build_model(args, n_channels: int, n_classes: int) -> nn.Module:
         return model
 
     # ── Legado (train_CLAUDE.py): decoder_channels para smp ──
-    _dec_base = [512, 256, 128, 64, 32]
-    decoder_ch = tuple(_dec_base[:args.encoder_depth][::-1]
-                       if arch == 'linknet'
-                       else _dec_base[:args.encoder_depth])
+    # Linknet nao aceita decoder_channels; demais arches sim.
+    decoder_ch = tuple([512, 256, 128, 64, 32][:args.encoder_depth])
 
     SMP_COMMON = dict(
         encoder_name    = args.backbone,
@@ -721,7 +719,7 @@ def build_model(args, n_channels: int, n_classes: int) -> nn.Module:
         backbone = smp.MAnet(**SMP_COMMON, decoder_channels=decoder_ch,
                              decoder_use_batchnorm=True, decoder_pab_channels=64)
     elif arch == "linknet":
-        backbone = smp.Linknet(**SMP_COMMON, decoder_channels=decoder_ch)
+        backbone = smp.Linknet(**SMP_COMMON)
     elif arch == "BPATUNet":
         backbone = BPATUNet(in_channels=n_channels, n_classes=feature_channels,
                             base_channels=args.base_channels,

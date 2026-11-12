@@ -1464,10 +1464,8 @@ def build_backbone(args, in_channels: int, out_ch: int, depth: int = 4) -> nn.Mo
             decoder_pab_channels=64,
         )
     elif args.arch == "linknet":
-        return smp.Linknet(
-            **SMP_COMMON, classes=out_ch,
-            decoder_channels=(256, 128, 64, 32),
-        )
+        # Linknet do SMP nao aceita decoder_channels (decoder segue o encoder).
+        return smp.Linknet(**SMP_COMMON, classes=out_ch)
     elif args.arch == "BPATUNet":
         return BPATUNet(
             in_channels=in_channels,

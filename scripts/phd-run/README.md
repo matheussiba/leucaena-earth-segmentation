@@ -152,10 +152,20 @@ PHD_RUN_ROOT/
     experiment.yaml          # rascunho (editavel) do proximo run
     run-001/
       experiment.yaml        # snapshot imutavel da config usada neste run
-      run.yaml               # registry (+ config: epochs/lr/patch/...)
+      run.yaml               # registry (+ config + metrics leucaena pos-predict)
       models/
       predictions/<aoi>/     # pred_class.tif, pred_dist.tif, pred_dist_bin_*.tif
-  reports/summary.md  summary.csv   # inclui epochs/lr/patch por run
+  reports/summary.md  summary.csv   # ranking F1/IoU/P/R/%cena cls foco
+```
+
+Apos `predict`, o `run.py` grava em `predictions[].metrics` (e `metrics_train` se AOI=treino):
+`labeled_f1`, `labeled_iou`, `labeled_precision`, `labeled_recall`, `scene_pct_class`.
+
+Para backfill de runs antigos:
+
+```powershell
+python scripts/phd-run/run.py eval
+python scripts/phd-run/run.py report
 ```
 
 ## Docker

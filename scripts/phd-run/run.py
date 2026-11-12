@@ -13,6 +13,7 @@ Fases:
   predict   (proc 3) aplica pesos de um run a um AOI (NAO cria run novo)
   post      (proc 4) pos-processa os rasters de predicao
   report    agrega todos os run.yaml em reports/summary.{md,csv}
+  eval      preenche predictions[].metrics (F1/IoU/P/R/%cena cls foco) nos run.yaml
   all       lidar(python) -> resolve -> labels -> train -> predict -> post
 
 Config:
@@ -587,7 +588,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("phase", choices=["lidar", "resolve", "labels", "train", "predict",
-                                      "post", "report", "all"])
+                                      "post", "eval", "report", "all"])
     ap.add_argument("-aoi", dest="aoi", help="nome do AOI (=> aois/<aoi>.gpkg)")
     ap.add_argument("-experiment", dest="experiment", help="<rede>/<nome>")
     ap.add_argument("-run", dest="run", help="run-00N (train cria; predict reusa)")
@@ -621,10 +622,15 @@ def main():
     lay.ensure()
     profile = (a.profile or env.get("TRAIN_PROFILE", "home")).lower()
 
-    # report nao precisa de experimento/aoi
+    # report / eval nao precisam de experimento/aoi
     if a.phase == "report":
         rep = REPO / "reports" / "build-registry-report.py"
         return sys.exit(host_run(rep, ["--root", str(lay.root)], dry=a.dry_run))
+    if a.phase == "eval":
+        from eval_leucaena import backfill_root  # noqa: PLC0415
+        n = backfill_root(lay.root)
+        print(f"\n[OK] fases concluidas: eval ({n} run.yaml)")
+        return
 
     if a.phase == "lidar":
         if not a.aoi:
@@ -720,12 +726,41 @@ def main():
             rc, out = phase_predict(lay, cfg, a.aoi, res, run, a.runtime, dry=a.dry_run)
             if rc not in (0, None) and not a.dry_run:
                 sys.exit(f"[ABORT] predict rc={rc}")
-            # anexa item em predictions:
+            # anexa item em predictions: + metricas leucaena (cls foco vs masks)
             rd = run_dir(lay, a.experiment, run)
             data = load_run_yaml(rd)
             preds = data.setdefault("predictions", [])
-            preds.append({"aoi": a.aoi, "profile": profile, "at": _now(),
-                          "out": str(out).replace("\\", "/")})
+            item = {"aoi": a.aoi, "profile": profile, "at": _now(),
+                    "out": str(out).replace("\\", "/")}
+            if not a.dry_run:
+                try:
+                    from eval_leucaena import eval_pred_vs_masks, masks_dir_for_dataset  # noqa: PLC0415
+                    masks = masks_dir_for_dataset(lay.root, data.get("dataset_id") or "")
+                    pred_tif = Path(out) / "pred_class.tif"
+                    rc_cls = int(cfg.get("report_class", 1) or 1)
+                    if masks and pred_tif.is_file():
+                        m = eval_pred_vs_masks(pred_tif, masks, rc_cls)
+                        if m:
+                            item["metrics"] = m
+                            if a.aoi == data.get("aoi_train"):
+                                data["metrics_train"] = {
+                                    "leucaena_f1": m["labeled_f1"],
+                                    "iou": m["labeled_iou"],
+                                    "precision": m["labeled_precision"],
+                                    "recall": m["labeled_recall"],
+                                    "scene_pct_class": m["scene_pct_class"],
+                                    "report_class": m["report_class"],
+                                }
+                            print(
+                                f"[eval] cls{rc_cls} F1={m['labeled_f1']:.4f} "
+                                f"IoU={m['labeled_iou']:.4f} "
+                                f"P={m['labeled_precision']:.4f} "
+                                f"R={m['labeled_recall']:.4f} "
+                                f"cena={m['scene_pct_class']:.2f}%"
+                            )
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[warn] eval leucaena falhou: {exc}")
+            preds.append(item)
             save_run_yaml(rd, data)
             stamp(rd, "predict", "finished")
         elif ph == "post":

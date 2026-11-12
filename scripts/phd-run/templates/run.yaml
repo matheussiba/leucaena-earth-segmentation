@@ -20,15 +20,34 @@ timestamps:
   train:        {started: "", finished: ""}    # proc 2
   predict:      {started: "", finished: ""}    # proc 3
   postprocess:  {started: "", finished: ""}    # proc 4
-metrics_train: {leucaena_f1: 0.0, iou: 0.0, best_val: 0.0}
+# metricas da AOI de treino (preenchidas apos predict / `run.py eval`)
+# labeled_* = so pixels com GT>0; scene_pct_class = % da cena predita como cls foco
+metrics_train:
+  leucaena_f1: 0.0          # = labeled_f1 (alias)
+  iou: 0.0                  # = labeled_iou
+  precision: 0.0
+  recall: 0.0
+  scene_pct_class: 0.0
+  report_class: 1
+  best_val: 0.0
 changes: "o que mudou deste run para o anterior (ex.: filtro CHM>2, lbl-v2)"
 status: done
 predictions:                               # cada aplicacao dos pesos deste run
   - aoi: 261002-riodaspedras
     profile: home
     at: 2026-11-02T20:10:00
-    metrics: {leucaena_f1: 0.0}
+    out: predictions/261002-riodaspedras
+    metrics:
+      report_class: 1
+      labeled_f1: 0.0
+      labeled_iou: 0.0
+      labeled_precision: 0.0
+      labeled_recall: 0.0
+      leucaena_f1: 0.0
+      iou: 0.0
+      scene_pct_class: 0.0
   - aoi: 260515-piracicaba
     profile: lab
     at: 2026-11-03T09:00:00
-    metrics: {leucaena_f1: 0.0}
+    out: predictions/260515-piracicaba
+    metrics: {labeled_f1: 0.0, labeled_iou: 0.0, scene_pct_class: 0.0}

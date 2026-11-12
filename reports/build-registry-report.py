@@ -1,17 +1,15 @@
 """
 build-registry-report.py
 =========================
-Varre todos os experiments/<rede>/<nome>/<run>/run.yaml do PHD_RUN_ROOT e gera:
+Varre todos os experiments/**/run-*/run.yaml do PHD_RUN_ROOT e gera:
   reports/summary.csv  - uma linha por run (rede, experimento, AOI treino, config
-                         congelada, metricas, changes, timestamps)
-  reports/summary.md   - tabela legivel + evolucao run-001..run-00N por experimento
-                         + MATRIZ treino-AOI x predicao-AOI (generalizacao cross-area)
+                         congelada, metricas leucaena, changes, timestamps)
+  reports/summary.md   - tabela legivel + ranking cls foco + evolucao + matriz cross-AOI
 
 Config por run: run.yaml -> config:  e/ou snapshot
   experiments/<rede>/<nome>/<run>/experiment.yaml  (copia imutavel do rascunho)
 
-Sem dependencias externas (usa scripts/phd-run/_miniyaml.py). Reaproveita a ideia
-do parser de reports/fill-resultados.py, mas lendo o registry novo (run.yaml).
+Sem dependencias externas (usa scripts/phd-run/_miniyaml.py).
 
 Uso:
   python reports/build-registry-report.py --root C:/00_PHD_MSB_RUN
@@ -43,7 +41,11 @@ def _cfg(r: dict) -> dict:
 def collect(root: Path) -> list[dict]:
     rows = []
     exp_root = root / "experiments"
-    for run_yaml in sorted(exp_root.glob("*/*/*/run.yaml")):
+    # rglob: cobre experiments/<rede>/... e experiments/batch_*/<rede>/...
+    for run_yaml in sorted(exp_root.rglob("run.yaml")):
+        # ignora templates / lixo fora de run-00N
+        if "run-" not in run_yaml.parent.name:
+            continue
         try:
             d = yaml.load(run_yaml)
         except Exception as exc:  # noqa: BLE001
@@ -52,7 +54,10 @@ def collect(root: Path) -> list[dict]:
         if not isinstance(d, dict):
             continue
         d["_path"] = run_yaml
-        # snapshot ao lado do run.yaml (imutavel); preenche config se run antigo
+        try:
+            d["_rel"] = str(run_yaml.parent.relative_to(exp_root)).replace("\\", "/")
+        except ValueError:
+            d["_rel"] = str(run_yaml.parent)
         snap = run_yaml.parent / "experiment.yaml"
         d["_has_snapshot"] = snap.is_file()
         if "config" not in d and snap.is_file():
@@ -75,24 +80,54 @@ def _metrics_flat(m: dict | None) -> dict:
     return {k: v for k, v in (m or {}).items()} if isinstance(m, dict) else {}
 
 
+def _train_aoi_metrics(r: dict) -> dict:
+    """Prefere metrics_train; senao metrics da predicao na aoi_train."""
+    mt = _metrics_flat(r.get("metrics_train"))
+    if mt.get("leucaena_f1") not in (None, "", 0, 0.0) or mt.get("labeled_f1") is not None:
+        # normaliza aliases
+        if "labeled_f1" not in mt and "leucaena_f1" in mt:
+            mt["labeled_f1"] = mt["leucaena_f1"]
+        if "labeled_iou" not in mt and "iou" in mt:
+            mt["labeled_iou"] = mt["iou"]
+        return mt
+    aoi = r.get("aoi_train")
+    for p in (r.get("predictions") or []):
+        if p.get("aoi") == aoi and isinstance(p.get("metrics"), dict):
+            m = _metrics_flat(p["metrics"])
+            return {
+                "leucaena_f1": m.get("labeled_f1", m.get("leucaena_f1")),
+                "iou": m.get("labeled_iou", m.get("iou")),
+                "labeled_f1": m.get("labeled_f1", m.get("leucaena_f1")),
+                "labeled_iou": m.get("labeled_iou", m.get("iou")),
+                "precision": m.get("labeled_precision", m.get("precision")),
+                "recall": m.get("labeled_recall", m.get("recall")),
+                "scene_pct_class": m.get("scene_pct_class"),
+                "report_class": m.get("report_class"),
+                "best_val": mt.get("best_val"),
+            }
+    return mt
+
+
 def write_csv(rows: list[dict], out: Path):
-    cols = ["network", "experiment", "run", "profile", "aoi_train", "dataset_id",
+    cols = ["network", "experiment", "run", "rel_path", "profile", "aoi_train", "dataset_id",
             "status", "parent_run", "changes",
             "epochs", "lr", "patch_size", "task", "latefusion", "fusion",
             "num_classes", "report_class", "has_snapshot",
-            "train_leucaena_f1", "train_iou", "train_best_val",
+            "train_leucaena_f1", "train_iou", "train_precision", "train_recall",
+            "train_scene_pct_class", "train_best_val",
             "n_predictions", "predict_aois"]
     with out.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
         for r in rows:
-            mt = _metrics_flat(r.get("metrics_train"))
+            mt = _train_aoi_metrics(r)
             c = _cfg(r)
             preds = r.get("predictions") or []
             w.writerow({
                 "network": r.get("network", ""),
                 "experiment": r.get("experiment", ""),
                 "run": r.get("run", ""),
+                "rel_path": r.get("_rel", ""),
                 "profile": r.get("profile", ""),
                 "aoi_train": r.get("aoi_train", ""),
                 "dataset_id": r.get("dataset_id", ""),
@@ -106,10 +141,13 @@ def write_csv(rows: list[dict], out: Path):
                 "latefusion": c.get("latefusion", ""),
                 "fusion": c.get("fusion", ""),
                 "num_classes": c.get("num_classes", ""),
-                "report_class": c.get("report_class", ""),
+                "report_class": c.get("report_class", mt.get("report_class", "")),
                 "has_snapshot": r.get("_has_snapshot", False),
-                "train_leucaena_f1": mt.get("leucaena_f1", ""),
-                "train_iou": mt.get("iou", ""),
+                "train_leucaena_f1": mt.get("labeled_f1", mt.get("leucaena_f1", "")),
+                "train_iou": mt.get("labeled_iou", mt.get("iou", "")),
+                "train_precision": mt.get("precision", mt.get("labeled_precision", "")),
+                "train_recall": mt.get("recall", mt.get("labeled_recall", "")),
+                "train_scene_pct_class": mt.get("scene_pct_class", ""),
                 "train_best_val": mt.get("best_val", ""),
                 "n_predictions": len(preds),
                 "predict_aois": ";".join(sorted({p.get("aoi", "") for p in preds})),
@@ -118,31 +156,68 @@ def write_csv(rows: list[dict], out: Path):
 
 def _pred_metric(p: dict):
     m = _metrics_flat(p.get("metrics"))
-    for k in ("leucaena_f1", "f1", "iou"):
+    for k in ("labeled_f1", "leucaena_f1", "f1", "iou"):
         if k in m:
             return _num(m[k])
     return None
+
+
+def _fmt3(v) -> str:
+    n = _num(v)
+    return "" if n is None else f"{n:.3f}"
 
 
 def write_md(rows: list[dict], out: Path):
     L = ["# Registry - resumo de experimentos", "",
          f"Runs encontrados: **{len(rows)}**", ""]
 
+    # 0) ranking leucaena (classe foco, pixels rotulados)
+    ranked = []
+    for r in rows:
+        mt = _train_aoi_metrics(r)
+        f1 = _num(mt.get("labeled_f1", mt.get("leucaena_f1")))
+        if f1 is None:
+            continue
+        ranked.append((f1, r, mt))
+    ranked.sort(key=lambda t: -t[0])
+    L += ["## Ranking leucaena (cls foco, pixels rotulados)", "",
+          "| Rank | Rede | F1 cls1 | IoU cls1 | P | R | % cena = cls1 | path |",
+          "|---|---|---:|---:|---:|---:|---:|---|"]
+    if ranked:
+        for i, (f1, r, mt) in enumerate(ranked, 1):
+            iou = _fmt3(mt.get("labeled_iou", mt.get("iou")))
+            p = _fmt3(mt.get("precision", mt.get("labeled_precision")))
+            rec = _fmt3(mt.get("recall", mt.get("labeled_recall")))
+            cena = mt.get("scene_pct_class")
+            cena_s = "" if cena in (None, "") else f"{_num(cena):.1f}%"
+            L.append(
+                f"| {i} | {r.get('network', '')} | **{_fmt3(f1)}** | {iou} | {p} | {rec} "
+                f"| {cena_s} | `{r.get('_rel', '')}` |"
+            )
+    else:
+        L.append("| — | _(rode `python scripts/phd-run/run.py eval`)_ | — | — | — | — | — | — |")
+    L.append("")
+
     # 1) tabela por run
     L += ["## Runs", "",
-          "| rede | experimento | run | AOI treino | ep | lr | patch | f1(treino) | status | changes |",
-          "|---|---|---|---|---|---|---|---|---|---|"]
+          "| rede | experimento | run | AOI treino | ep | lr | patch | f1 | iou | %cena | status | changes |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in sorted(rows, key=lambda x: (x.get("network", ""), x.get("experiment", ""),
                                          str(x.get("run", "")))):
-        mt = _metrics_flat(r.get("metrics_train"))
+        mt = _train_aoi_metrics(r)
         c = _cfg(r)
-        L.append(f"| {r.get('network','')} | {r.get('experiment','')} | {r.get('run','')} "
-                 f"| {r.get('aoi_train','')} | {c.get('epochs','')} | {c.get('lr','')} "
-                 f"| {c.get('patch_size','')} | {mt.get('leucaena_f1','')} "
-                 f"| {r.get('status','')} "
-                 f"| {str(r.get('changes','')).replace('|','/')} |")
+        cena = mt.get("scene_pct_class")
+        cena_s = "" if cena in (None, "") else f"{_num(cena):.1f}%"
+        L.append(
+            f"| {r.get('network','')} | {r.get('experiment','')} | {r.get('run','')} "
+            f"| {r.get('aoi_train','')} | {c.get('epochs','')} | {c.get('lr','')} "
+            f"| {c.get('patch_size','')} | {_fmt3(mt.get('labeled_f1', mt.get('leucaena_f1')))} "
+            f"| {_fmt3(mt.get('labeled_iou', mt.get('iou')))} | {cena_s} "
+            f"| {r.get('status','')} "
+            f"| {str(r.get('changes','')).replace('|','/')} |"
+        )
 
-    # 2) evolucao por experimento (run-001 -> run-00N)
+    # 2) evolucao por experimento
     L += ["", "## Evolucao por experimento", ""]
     by_exp: dict[str, list[dict]] = {}
     for r in rows:
@@ -151,7 +226,7 @@ def write_md(rows: list[dict], out: Path):
     for exp, rs in sorted(by_exp.items()):
         L.append(f"### {exp}")
         for r in sorted(rs, key=lambda x: str(x.get("run", ""))):
-            mt = _metrics_flat(r.get("metrics_train"))
+            mt = _train_aoi_metrics(r)
             c = _cfg(r)
             parent = f" (de {r.get('parent_run')})" if r.get("parent_run") else ""
             snap = " +snapshot" if r.get("_has_snapshot") else ""
@@ -160,8 +235,12 @@ def write_md(rows: list[dict], out: Path):
                 if c.get(k) not in (None, ""):
                     cfg_bits.append(f"{lab}={c.get(k)}")
             cfg_s = (", " + ", ".join(cfg_bits)) if cfg_bits else ""
-            L.append(f"- **{r.get('run','')}**{parent}{snap}: f1={mt.get('leucaena_f1','?')}, "
-                     f"iou={mt.get('iou','?')}{cfg_s} - {r.get('changes','') or 'sem nota'}")
+            L.append(
+                f"- **{r.get('run','')}**{parent}{snap}: "
+                f"f1={_fmt3(mt.get('labeled_f1', mt.get('leucaena_f1'))) or '?'}, "
+                f"iou={_fmt3(mt.get('labeled_iou', mt.get('iou'))) or '?'}"
+                f"{cfg_s} - {r.get('changes','') or 'sem nota'}"
+            )
         L.append("")
 
     # 3) matriz treino-AOI x predicao-AOI

@@ -1,11 +1,16 @@
 ﻿# =============================================================================
-# Batch: mesma AOI (+ mask) x todas as redes, patch 256, 30 ep, run-001
+# Batch: mesma AOI (+ mask) x todas as redes (config da referencia YAML)
 # -----------------------------------------------------------------------------
 # Referencia unica: PHD_RUN_ROOT/experiments/experiment-batch.yaml
 # (se nao existir, copia de scripts/phd-run/templates/experiment-batch.yaml)
 #
-# Gera experiments/<rede>/latefusion-multitask-p256/experiment.yaml (network:),
-# depois:
+# Nome da pasta = slug derivado do YAML (nao e rotulo fixo):
+#   latefusion|single + task + p<patch>
+#   ex.: latefusion:true, task:multitask, patch_size:256
+#        -> experiments/<rede>/latefusion-multitask-p256/
+# Override manual: -expName meu-nome
+#
+# Depois:
 #   1) lidar + resolve + labels UMA vez
 #   2) train + predict + post por rede
 #
@@ -20,7 +25,7 @@ param(
     [switch]$mask,
     [string]$maskGpkg,
     [string]$run = "run-001",
-    [string]$expName = "latefusion-multitask-p256",
+    [string]$expName = "",
     [string]$RefYaml = "",
     [string]$Architectures = "unet,unetplusplus,manet,linknet,BPATUNet,resunet",
     [ValidateSet("docker", "host")][string]$runtime = "docker",
@@ -32,6 +37,30 @@ param(
     [switch]$SkipPredict,
     [switch]$SkipPost
 )
+
+function Get-YamlScalar([string]$text, [string]$key, [string]$default = "") {
+    $pat = '(?m)^\s*' + [regex]::Escape($key) + '\s*:\s*(.+?)\s*$'
+    $m = [regex]::Match($text, $pat)
+    if (-not $m.Success) { return $default }
+    $v = $m.Groups[1].Value.Trim()
+    if ($v -match '^["''](.*)["'']$') { $v = $Matches[1] }
+    if ($v -match '^\#') { return $default }
+    $hash = $v.IndexOf('#')
+    if ($hash -ge 0) { $v = $v.Substring(0, $hash).Trim() }
+    return $v
+}
+
+function Get-ExperimentSlugFromYaml([string]$yamlText) {
+    # latefusion:true  -> latefusion
+    # latefusion:false -> single  (RGB single-source; nao ha early-fusion no motor)
+    $lfRaw = (Get-YamlScalar $yamlText "latefusion" "true").ToLowerInvariant()
+    $fusionMode = if ($lfRaw -in @("true", "1", "yes", "on")) { "latefusion" } else { "single" }
+    $task = (Get-YamlScalar $yamlText "task" "multitask").ToLowerInvariant()
+    if ($task -notmatch '^[a-z0-9_-]+$') { $task = "multitask" }
+    $patchRaw = Get-YamlScalar $yamlText "patch_size" "256"
+    if (-not ($patchRaw -match '^\d+$')) { $patchRaw = "256" }
+    return ("{0}-{1}-p{2}" -f $fusionMode, $task, $patchRaw)
+}
 
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -76,6 +105,16 @@ if (-not (Test-Path $refYaml)) {
 $archList = @($Architectures.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($archList.Count -lt 1) { throw "-Architectures vazio." }
 
+# ---- slug da pasta a partir do YAML (ou -expName) ---------------------------
+$refText = Get-Content -Raw -Encoding UTF8 $refYaml
+$slugAuto = Get-ExperimentSlugFromYaml $refText
+if ([string]::IsNullOrWhiteSpace($expName)) {
+    $expName = $slugAuto
+    Write-Host "[slug] derivado do YAML: $expName"
+} elseif ($expName -ne $slugAuto) {
+    Write-Host "[slug] -expName=$expName (YAML sugeriria $slugAuto)"
+}
+
 Write-Host "============================================================"
 Write-Host " ARCH BATCH  aoi=$aoi  run=$run  exp=$expName"
 Write-Host " PHD_RUN_ROOT=$root"
@@ -85,7 +124,6 @@ Write-Host " mask=$mask  skipLidar=$SkipLidar  dryRun=$DryRun"
 Write-Host "============================================================"
 
 # ---- garante experiment.yaml por rede (so muda network:) --------------------
-$refText = Get-Content -Raw -Encoding UTF8 $refYaml
 foreach ($arch in $archList) {
     $destDir = Join-Path (Join-Path $expRoot $arch) $expName
     $destYaml = Join-Path $destDir "experiment.yaml"

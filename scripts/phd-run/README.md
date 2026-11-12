@@ -88,10 +88,11 @@ de config. Referencia unica:
 
 `PHD_RUN_ROOT/experiments/experiment-batch.yaml`
 
-(se nao existir, o batch copia o template do repo). Edite epochs/lr/samples **ali**;
-o batch gera `experiments/<rede>/latefusion-multitask-p256/experiment.yaml` so
-mudando `network:`, prepara lidar/resolve/labels **uma vez**, depois treina +
-prediz cada rede.
+(se nao existir, o batch copia o template do repo). Edite epochs/lr/task/
+latefusion/patch **ali**; o nome da pasta e derivado desses campos
+(`latefusion|single` + `task` + `p<patch>`), ex. `latefusion-multitask-p256`.
+O batch gera `experiments/<rede>/<slug>/experiment.yaml` so mudando `network:`,
+prepara lidar/resolve/labels **uma vez**, depois treina + prediz cada rede.
 
 ```powershell
 cd <repo>
@@ -106,7 +107,9 @@ cd <repo>
 .\run_arch_batch.cmd -aoi 261002-riodaspedras -mask -DryRun
 ```
 
-Saida por rede: `experiments/<rede>/latefusion-multitask-p256/run-001/`.
+Saida por rede: `experiments/<rede>/<slug>/run-001/`
+(ex. `.../manet/latefusion-multitask-p256/run-001/` se o YAML tiver
+`latefusion: true`, `task: multitask`, `patch_size: 256`).
 
 ## Como rodar (raiz do repo)
 

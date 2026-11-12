@@ -1,10 +1,12 @@
 # Referencia do batch multi-rede (run_arch_batch).
 # No PHD_RUN_ROOT: experiments/experiment-batch.yaml
-# O batch copia este arquivo para experiments/<rede>/latefusion-multitask-p256/
-# e so altera a linha network:.
+# O batch deriva o nome da pasta de latefusion/task/patch_size, ex.:
+#   latefusion:true + multitask + 256 -> <rede>/latefusion-multitask-p256/
+#   latefusion:false + classification + 512 -> <rede>/single-classification-p512/
+# e so altera a linha network: no YAML copiado.
 # Cada run-00N ganha snapshot imutavel em .../run-00N/experiment.yaml.
 #
-# Edite AQUI epochs/lr/samples/etc. uma vez — vale para todas as redes.
+# Edite AQUI epochs/lr/task/latefusion/patch/etc. — vale para todas as redes.
 
 network: PLACEHOLDER
 task: multitask
